@@ -59,13 +59,42 @@ header h1 { font-size: 16px; margin: 0; font-weight: 650; }
 .budget > div { height: 100%; background: var(--accent); width: 0; }
 
 main { display: grid; grid-template-columns: 1fr 340px; min-height: 0; }
-.center { display: grid; grid-template-rows: auto auto 1fr auto; min-height: 0; border-right: 1px solid var(--border); }
+.center { position: relative; display: grid; grid-template-rows: auto auto auto 1fr auto; min-height: 0; border-right: 1px solid var(--border); }
 aside { overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+
+/* thin scrollbars */
+.feed, aside, dialog .db, pre { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.feed::-webkit-scrollbar, aside::-webkit-scrollbar { width: 9px; }
+.feed::-webkit-scrollbar-thumb, aside::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+
+.feedbar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.feedbar .grow { flex: 1; }
+.feedbar .count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.chips { display: inline-flex; gap: 4px; }
+.chip { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); color: var(--muted); font-size: 12.5px; cursor: pointer; }
+.chip.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+
+.jump { position: absolute; right: 18px; bottom: 86px; z-index: 5; border-radius: 999px; padding: 7px 14px;
+  background: var(--accent); color: var(--accent-text); border: 0; box-shadow: 0 4px 14px rgba(0,0,0,.3);
+  opacity: 0; transform: translateY(8px); pointer-events: none; transition: opacity .18s, transform .18s; }
+.jump.show { opacity: 1; transform: none; pointer-events: auto; }
+.jump .badge { background: rgba(255,255,255,.3); border-radius: 999px; padding: 0 6px; margin-left: 6px; font-size: 11px; }
+
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 50; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.toast { background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--accent);
+  border-radius: 10px; padding: 10px 14px; box-shadow: 0 6px 20px rgba(0,0,0,.35); max-width: 340px; cursor: pointer;
+  animation: slidein .25s ease; }
+.toast.ok { border-left-color: var(--ok); } .toast.bad { border-left-color: var(--err); }
+.toast b { display: block; margin-bottom: 2px; }
+.toast .sub { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@keyframes slidein { from { opacity: 0; transform: translateX(20px); } }
 
 .now { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .now .row { display: flex; align-items: center; gap: 10px; }
 .now .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.now .action { color: var(--muted); margin-top: 4px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now .action { color: var(--muted); margin-top: 4px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 7px; }
+.spin { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; flex: none; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .progress { height: 4px; background: var(--panel-2); border-radius: 2px; margin-top: 8px; overflow: hidden; }
 .progress > div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
 
@@ -75,7 +104,9 @@ aside { overflow: auto; padding: 14px; display: flex; flex-direction: column; ga
 .approval .actions { display: flex; gap: 8px; margin-top: 8px; }
 
 .feed { overflow: auto; padding: 10px 16px 16px; min-height: 0; }
-.ev { display: grid; grid-template-columns: 58px 1fr; gap: 10px; padding: 4px 0; }
+.ev { display: grid; grid-template-columns: 58px 1fr; gap: 10px; padding: 4px 0; animation: evin .18s ease; }
+@keyframes evin { from { opacity: 0; transform: translateY(3px); } }
+.filter-key .ev.step, .filter-key .ev.result, .filter-key .ev.output { display: none; }
 .ev .ts { color: var(--muted); font-size: 12px; padding-top: 1px; font-variant-numeric: tabular-nums; }
 .ev .body { white-space: pre-wrap; word-break: break-word; }
 .ev.task .body, .ev.final .body { font-weight: 500; }
@@ -150,8 +181,17 @@ dialog .db { padding: 12px 16px; overflow: auto; max-height: calc(86vh - 56px); 
         <div class="action" id="nowAction">Waiting for work.</div>
         <div class="progress"><div id="nowBar"></div></div>
       </div>
+      <div class="feedbar">
+        <div class="chips">
+          <button class="chip on" data-filter="all">All activity</button>
+          <button class="chip" data-filter="key" title="Show only plans, recaps, approvals and results">Summary</button>
+        </div>
+        <div class="grow"></div>
+        <span class="count" id="feedCount"></span>
+      </div>
       <div class="approvals" id="approvals"></div>
       <div class="feed" id="feed"></div>
+      <button class="jump" id="jump">↓ Latest<span class="badge" id="jumpBadge" hidden>0</span></button>
       <div class="composer">
         <form id="form">
           <textarea id="input" rows="1" placeholder="Describe a task… or type a /command" autocomplete="off"></textarea>
@@ -208,6 +248,7 @@ dialog .db { padding: 12px 16px; overflow: auto; max-height: calc(86vh - 56px); 
   <div class="dh"><b id="dlgTitle" style="flex:1"></b><button onclick="dlg.close()">Close</button></div>
   <div class="db" id="dlgBody"></div>
 </dialog>
+<div class="toasts" id="toasts"></div>
 
 <script>
 "use strict";
@@ -247,7 +288,18 @@ const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: "2-di
 const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
 
 // --- feed --------------------------------------------------------------------------------
+let evCount = 0, unread = 0, baseTitle = document.title;
 function nearBottom() { return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80; }
+function toBottom() { feed.scrollTop = feed.scrollHeight; unread = 0; updateJump(); }
+function updateJump() {
+  const show = !nearBottom();
+  if (!show) unread = 0;
+  $("jump").classList.toggle("show", show);
+  const badge = $("jumpBadge");
+  badge.hidden = unread === 0;
+  badge.textContent = unread > 99 ? "99+" : unread;
+  document.title = unread ? `(${unread}) ${baseTitle}` : baseTitle;
+}
 function addRow(kind, ts, node, extraClass) {
   const stick = nearBottom();
   const row = document.createElement("div");
@@ -257,8 +309,19 @@ function addRow(kind, ts, node, extraClass) {
   row.append(t, b);
   feed.appendChild(row);
   while (feed.children.length > 1500) feed.removeChild(feed.firstChild);
-  if (stick) feed.scrollTop = feed.scrollHeight;
+  evCount++;
+  $("feedCount").textContent = evCount + " event" + (evCount === 1 ? "" : "s");
+  if (stick) { feed.scrollTop = feed.scrollHeight; }
+  else if (extraClass !== "mine") { unread++; }
+  updateJump();
 }
+feed.addEventListener("scroll", updateJump, { passive: true });
+$("jump").onclick = toBottom;
+document.querySelectorAll(".chip").forEach((c) => c.onclick = () => {
+  document.querySelectorAll(".chip").forEach((x) => x.classList.toggle("on", x === c));
+  feed.classList.toggle("filter-key", c.dataset.filter === "key");
+  if (nearBottom()) toBottom();
+});
 function addEvent(ev) {
   if (ev.id <= lastId) return;
   lastId = ev.id;
@@ -273,7 +336,22 @@ function addEvent(ev) {
     return;
   }
   addRow(ev.kind, ev.ts, safeHTML(ev.html));
+  if (ev.kind === "final") {
+    const st = ev.data.status || "";
+    const map = { done: ["ok", "🏁 Task done"], failed: ["bad", "⚠️ Task stopped"], aborted: ["bad", "🛑 Task aborted"] };
+    const [cls, label] = map[st] || ["", "Task update"];
+    toast(cls, label, (ev.data.summary || "").split("\n").filter(Boolean)[0] || "");
+  }
   if (["task", "final", "result", "step"].includes(ev.kind)) scheduleState();
+}
+
+function toast(cls, title, sub) {
+  const el = document.createElement("div");
+  el.className = "toast " + cls;
+  el.innerHTML = `<b>${esc(title)}</b>` + (sub ? `<div class="sub">${esc(sub)}</div>` : "");
+  el.onclick = () => el.remove();
+  $("toasts").appendChild(el);
+  setTimeout(() => el.remove(), 7000);
 }
 function addLocal(kind, html, cls) { addRow(kind, Date.now() / 1000, safeHTML(html), cls); }
 
@@ -371,7 +449,9 @@ async function loadState() {
   if (s.current) {
     const c = s.current;
     $("nowTitle").textContent = `${c.kind === "goal" ? "🎯 Goal cycle" : "Task"} #${c.id} — ${c.description.split("\n")[0]}`;
-    $("nowAction").replaceChildren(c.action ? safeHTML(c.action) : document.createTextNode("Thinking…"));
+    const spin = document.createElement("span"); spin.className = "spin";
+    const txt = c.action ? safeHTML(c.action) : document.createTextNode(`Thinking… (step ${c.step}/${s.max_steps})`);
+    $("nowAction").replaceChildren(spin, txt);
     $("nowBar").style.width = (100 * c.step / s.max_steps) + "%";
     $("stopBtn").disabled = false;
   } else {
