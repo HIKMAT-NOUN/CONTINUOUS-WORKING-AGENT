@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable
 from llm import LLM, LLMError
 from hub import Hub
 from textfmt import code, h, truncate
-from tools import TOOL_SPECS, Tools, first_line
+from tools import Tools, first_line
 
 if TYPE_CHECKING:
     from config import Config
@@ -20,18 +20,58 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("agent")
 
-SYSTEM_PROMPT = """You are an autonomous worker agent running 24/7 on a Linux server. A human \
-supervises you through Telegram and sees every tool call you make.
-
-Working directory (WORKDIR): {workdir}
+BASE_RULES = """Working directory (WORKDIR): {workdir}
 {access}
 - Before each batch of tool calls, write ONE short sentence saying what you are about to do \
 and why. It is shown to the human as your plan.
 - Use send_update for notable milestones in long tasks; don't spam it.
-- You have at most {max_steps} tool calls for this task. Be efficient.
-- When the task is complete (or cannot be completed), reply WITHOUT any tool call. That reply \
-is your final report to the human: state the result first, concisely, then key details.
-"""
+- You have at most {max_steps} tool calls for this job. Be efficient.
+- When the job is complete (or cannot be completed), reply WITHOUT any tool call. That reply \
+is your final report: state the result first, concisely, then key details."""
+
+MAIN_PROMPT = """You are the lead autonomous agent running 24/7 on a Linux server. A human \
+supervises you through a live dashboard, Telegram and a terminal, and sees every step you take.
+
+{base}
+
+Delegation (optional — use it when a job has independent parts or benefits from parallel work):
+- spawn_worker(title, instructions): start a helper agent that works in parallel on a focused \
+sub-task and reports back. Give it a short title and self-contained instructions. It cannot \
+spawn further helpers. Returns an agent id.
+- wait_for_workers(agent_ids): wait for one or more helpers you spawned and read their results.
+- request_review(subject): ask the review agent for a second opinion before you finish \
+something important or risky. It inspects the work and returns a verdict and notes.
+Keep the number of helpers small and purposeful; you do the final synthesis and report."""
+
+WORKER_PROMPT = """You are a helper agent spawned by the lead agent to do one focused sub-task \
+in parallel with others. Work only on what you were asked.
+
+{base}
+
+- You cannot spawn further helpers. Finish by reporting your result clearly to the lead agent."""
+
+REVIEW_PROMPT = """You are the review agent. The lead agent has asked you to review some work \
+before it is accepted. Inspect what was done — read files, check outputs, re-run quick checks — \
+and judge whether it is correct, complete and safe.
+
+{base}
+
+- Be concise and specific. Finish with a verdict line starting with VERDICT: APPROVED or \
+VERDICT: CHANGES NEEDED, followed by the key reasons and any concrete fixes."""
+
+
+@dataclass
+class Job:
+    task_id: int                      # numeric id used for step logging / persistence
+    description: str
+    kind: str = "task"                # task | goal | worker | review
+    system: str = ""                  # system prompt; filled by the factory
+    max_steps: int = 40
+    persist: bool = False             # save conversation to the tasks table (main queue tasks only)
+    recap: bool = False               # emit periodic plain-language recaps (main only)
+    messages: list | None = None      # resume from a saved conversation
+    steps: int = 0
+    tokens: int = 0
 
 _THINK = re.compile(r"<think>.*?(?:</think>|$)", re.S | re.I)
 
@@ -84,23 +124,25 @@ def describe_call(name: str, args: dict) -> str:
 
 
 class Agent:
-    def __init__(self, cfg: "Config", db: "DB", llm: LLM, hub: Hub,
-                 approve: Callable[[str, str], Awaitable[bool]],
+    def __init__(self, cfg: "Config", db: "DB", llm: LLM, hub: Hub, tools: Tools,
                  wait_if_paused: Callable[[], Awaitable[None]],
-                 on_step: Callable[[int, str], None] | None = None):
+                 agent_id: str = "main", role: str = "main",
+                 on_update: Callable[..., None] | None = None):
         self.cfg = cfg
         self.db = db
         self.llm = llm
         self.hub = hub
+        self.tools = tools
         self.wait_if_paused = wait_if_paused
-        self.on_step = on_step or (lambda n, s: None)
-        self.tools = Tools(cfg.workdir, cfg.secrets, approve, self._model_update, cfg.shell_timeout,
-                           cfg.full_access, cfg.approvals)
+        self.agent_id = agent_id
+        self.role = role
+        self.on_update = on_update or (lambda **k: None)
+        tools.update = self._model_update   # route the model's send_update through this agent
 
     # narration helpers ----------------------------------------------------------
     def say(self, text_html: str, level: str = "steps", kind: str = "info", **data) -> None:
         """level: 'always' (finals, alerts), 'steps' (narration) or 'full' (tool output)."""
-        self.hub.emit(text_html, kind=kind, level=level, **data)
+        self.hub.emit(text_html, kind=kind, level=level, agent=self.agent_id, **data)
 
     def _model_update(self, text: str) -> None:
         self.say(f"💬 {h(text)}", kind="update", text=text)
@@ -112,45 +154,45 @@ class Agent:
         return prompt + completion
 
     # main loop --------------------------------------------------------------------
-    async def run(self, task: dict) -> Outcome:
-        task_id = task["id"]
-        messages = self.db.load_messages(task)
-        steps, tokens = task.get("steps") or 0, task.get("tokens") or 0
+    async def run(self, job: Job) -> Outcome:
+        task_id = job.task_id
+        messages = job.messages
+        steps, tokens = job.steps, job.tokens
         actions: list[str] = []       # short lines fed to the periodic plain-language recap
         last_recap = steps
         if messages:
             messages.append({"role": "user", "content": "(The agent process was restarted. "
-                             "Continue the task from where you left off; verify the state of "
+                             "Continue the job from where you left off; verify the state of "
                              "anything that might have been interrupted.)"})
         else:
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT.format(
-                    workdir=self.cfg.workdir, max_steps=self.cfg.max_steps_per_task,
-                    access=access_rules(self.cfg))},
-                {"role": "user", "content": task["description"]},
-            ]
+            messages = [{"role": "system", "content": job.system},
+                        {"role": "user", "content": job.description}]
+        tools_specs = self.tools.specs()
 
         while True:
             await self.wait_if_paused()  # also enforces the daily token budget
+            self.on_update(step=steps, thinking="")
             try:
-                resp = await self.llm.chat(messages, TOOL_SPECS)
+                resp = await self.llm.chat(messages, tools_specs)
             except LLMError as e:
                 return Outcome("failed", f"LLM error: {e}", steps, tokens)
             tokens += self.account(resp.prompt_tokens, resp.completion_tokens, resp.cost)
             messages.append(resp.message)
 
             if not resp.tool_calls:
-                self.db.save_progress(task_id, messages, steps, tokens)
+                if job.persist:
+                    self.db.save_progress(task_id, messages, steps, tokens)
                 return Outcome("done", visible_text(resp.content) or "(no final message)", steps, tokens)
 
             plan = visible_text(resp.content)
             if plan:
+                self.on_update(thinking=first_line(plan, 300))
                 self.say(f"🧠 thinking: {h(truncate(first_line(plan, 300), 300))}",
                          kind="thinking", task_id=task_id, text=plan)
 
             for tc in resp.tool_calls:
                 name = tc["function"]["name"]
-                if steps >= self.cfg.max_steps_per_task:
+                if steps >= job.max_steps:
                     messages.append({"role": "tool", "tool_call_id": tc["id"],
                                      "content": "error: step limit reached, call not executed"})
                     continue
@@ -163,20 +205,21 @@ class Agent:
                     result_text = f"error: invalid JSON arguments: {e}"
                     self.say(f"❌ {h(name)}: invalid arguments from model", kind="result",
                              task_id=task_id, step=steps, ok=False)
-                    self.db.log_step(task_id, steps, name, tc["function"]["arguments"], "error", result_text, 0)
+                    self.db.log_step(task_id, steps, name, tc["function"]["arguments"], "error",
+                                     result_text, 0, self.agent_id)
                     messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result_text})
                     continue
 
                 narration = describe_call(name, args)
-                self.on_step(steps, narration)
+                self.on_update(step=steps, action=narration)
                 if name != "send_update":
                     self.say(narration, kind="step", task_id=task_id, step=steps, tool=name, args=args)
                 t0 = time.monotonic()
                 res = await self.tools.call(name, args)
                 dt = time.monotonic() - t0
                 status = "denied" if res.denied else ("ok" if res.ok else "error")
-                self.db.log_step(task_id, steps, name, args, status, res.output, dt)
-                log.info("task %s step %s %s %s -> %s (%s)", task_id, steps, name,
+                self.db.log_step(task_id, steps, name, args, status, res.output, dt, self.agent_id)
+                log.info("[%s] step %s %s %s -> %s (%s)", self.agent_id, steps, name,
                          truncate(json.dumps(args, ensure_ascii=False), 300), status, res.summary)
                 if name != "send_update":
                     icon = "✅ ok" if res.ok else ("🚫 denied" if res.denied else "❌ error")
@@ -190,19 +233,20 @@ class Agent:
                                f"-> {status}: {truncate(res.summary, 120)}")
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": res.output})
 
-            self.db.save_progress(task_id, messages, steps, tokens)
+            if job.persist:
+                self.db.save_progress(task_id, messages, steps, tokens)
 
-            if self.cfg.progress_every and steps - last_recap >= self.cfg.progress_every \
-                    and steps < self.cfg.max_steps_per_task:
-                tokens += await self._recap(task, actions)
+            if job.recap and self.cfg.progress_every and steps - last_recap >= self.cfg.progress_every \
+                    and steps < job.max_steps:
+                tokens += await self._recap(job, actions)
                 last_recap = steps
 
-            if steps >= self.cfg.max_steps_per_task:
+            if steps >= job.max_steps:
                 summary, extra = await self._final_summary(messages)
-                return Outcome("failed", f"Step limit ({self.cfg.max_steps_per_task}) reached.\n\n{summary}",
+                return Outcome("failed", f"Step limit ({job.max_steps}) reached.\n\n{summary}",
                                steps, tokens + extra)
 
-    async def _recap(self, task: dict, actions: list[str]) -> int:
+    async def _recap(self, job: Job, actions: list[str]) -> int:
         """One friendly sentence about the recent steps, for a non-technical watcher.
         A small, separate LLM call (does not carry the full tool output)."""
         recent = actions[-(self.cfg.progress_every * 2):]
@@ -211,7 +255,7 @@ class Agent:
              "watching live. Given the task and the agent's recent actions, reply with ONE short, "
              "plain-English sentence (max 25 words) about what it has been doing and where it is now. "
              "No tool names, no markdown, no preamble."},
-            {"role": "user", "content": "Task: " + truncate(task["description"], 300) + "\n\nRecent actions:\n- "
+            {"role": "user", "content": "Task: " + truncate(job.description, 300) + "\n\nRecent actions:\n- "
              + "\n- ".join(recent)},
         ]
         try:
@@ -221,7 +265,7 @@ class Agent:
         line = visible_text(resp.content)
         if line:
             self.say(f"🧭 {h(truncate(line, 300))}", kind="progress", level="steps",
-                     task_id=task["id"], text=line)
+                     task_id=job.task_id, text=line)
         return self.account(resp.prompt_tokens, resp.completion_tokens, resp.cost)
 
     async def _final_summary(self, messages: list[dict]) -> tuple[str, int]:

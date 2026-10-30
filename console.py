@@ -52,7 +52,9 @@ class ConsoleView:
         if kind == "approval_done" and data.get("aid") in self.pending:
             self.pending.remove(data["aid"])
         if visible(ev["level"], self.verbosity()):
-            print_html(ev["html"], ev["ts"])
+            agent = ev.get("agent", "main")
+            prefix = "" if agent == "main" else f"{YELLOW}[{agent}]{RESET} "
+            print_html(ev["html"], ev["ts"], prefix)
 
     def translate(self, line: str) -> str:
         """y / n -> /approve / /deny for the oldest pending approval."""

@@ -65,7 +65,7 @@ async def test_tools_full_access_and_no_approvals(wd, tmp_path_factory):
     outside = tmp_path_factory.mktemp("elsewhere")
     asked = []
 
-    async def approve(cmd, reason):
+    async def approve(cmd, reason, agent_id="main"):
         asked.append(cmd)
         return False
 

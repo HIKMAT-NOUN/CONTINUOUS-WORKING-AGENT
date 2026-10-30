@@ -33,16 +33,18 @@ CREATE TABLE IF NOT EXISTS steps (
     args        TEXT,
     status      TEXT NOT NULL,                     -- ok | error | denied
     output      TEXT,
-    duration    REAL
+    duration    REAL,
+    agent       TEXT NOT NULL DEFAULT 'main'
 );
 CREATE INDEX IF NOT EXISTS steps_task ON steps(task_id, step_no);
-CREATE TABLE IF NOT EXISTS events (            -- everything the agent narrated, for the web feed
+CREATE TABLE IF NOT EXISTS events (            -- everything an agent narrated, for the web feed
     id    INTEGER PRIMARY KEY AUTOINCREMENT,
     ts    REAL NOT NULL,
     kind  TEXT NOT NULL,
     level TEXT NOT NULL,
     html  TEXT NOT NULL,
-    data  TEXT
+    data  TEXT,
+    agent TEXT NOT NULL DEFAULT 'main'
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS usage (
@@ -72,6 +74,13 @@ class DB:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA synchronous=NORMAL")
             self.conn.executescript(SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        for table in ("events", "steps"):
+            cols = [r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            if "agent" not in cols:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN agent TEXT NOT NULL DEFAULT 'main'")
 
     def _q(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         with self.lock:
@@ -142,12 +151,12 @@ class DB:
 
     # steps ------------------------------------------------------------------
     def log_step(self, task_id: int, step_no: int, tool: str, args: Any, status: str,
-                 output: str, duration: float) -> None:
-        self._x("INSERT INTO steps(task_id,step_no,ts,tool,args,status,output,duration) "
-                "VALUES(?,?,?,?,?,?,?,?)",
+                 output: str, duration: float, agent: str = "main") -> None:
+        self._x("INSERT INTO steps(task_id,step_no,ts,tool,args,status,output,duration,agent) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
                 (task_id, step_no, time.time(), tool,
                  args if isinstance(args, str) else json.dumps(args, ensure_ascii=False),
-                 status, output[:20000], duration))
+                 status, output[:20000], duration, agent))
 
     def task_steps(self, task_id: int) -> list[dict]:
         return [dict(r) for r in self._q("SELECT * FROM steps WHERE task_id=? ORDER BY id", (task_id,))]
@@ -157,9 +166,9 @@ class DB:
         return [dict(r) for r in reversed(rows)]
 
     # events -----------------------------------------------------------------
-    def add_event(self, ts: float, kind: str, level: str, html: str, data: dict) -> int:
-        eid = self._x("INSERT INTO events(ts,kind,level,html,data) VALUES(?,?,?,?,?)",
-                      (ts, kind, level, html, json.dumps(data, ensure_ascii=False)))
+    def add_event(self, ts: float, kind: str, level: str, html: str, data: dict, agent: str = "main") -> int:
+        eid = self._x("INSERT INTO events(ts,kind,level,html,data,agent) VALUES(?,?,?,?,?,?)",
+                      (ts, kind, level, html, json.dumps(data, ensure_ascii=False), agent))
         if eid % 500 == 0:  # keep the table bounded
             self._x("DELETE FROM events WHERE id <= ?", (eid - 5000,))
         return eid

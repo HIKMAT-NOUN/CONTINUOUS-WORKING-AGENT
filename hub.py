@@ -27,14 +27,15 @@ LEVELS = ("off", "steps", "full")
 class Event:
     id: int
     ts: float
-    kind: str      # info | task | thinking | step | result | output | update | final | alert | approval | approval_done | reply
+    kind: str      # info | task | thinking | step | result | output | update | final | alert | approval | approval_done | reply | agent
     level: str     # always | steps | full
     html: str
     data: dict = field(default_factory=dict)
+    agent: str = "main"
 
     def to_json(self) -> dict:
         return {"id": self.id, "ts": self.ts, "kind": self.kind, "level": self.level,
-                "html": self.html, "data": self.data}
+                "html": self.html, "data": self.data, "agent": self.agent}
 
 
 class Sink(Protocol):
@@ -65,12 +66,13 @@ class Hub:
         if sink in self.sinks:
             self.sinks.remove(sink)
 
-    def emit(self, html: str, kind: str = "info", level: str = "always", **data) -> Event:
+    def emit(self, html: str, kind: str = "info", level: str = "always", agent: str = "main",
+             **data) -> Event:
         html = redact(html, self.secrets)
         data = {k: redact(v, self.secrets) if isinstance(v, str) else v for k, v in data.items()}
         ts = time.time()
-        eid = self.db.add_event(ts, kind, level, html, data)
-        ev = Event(eid, ts, kind, level, html, data)
+        eid = self.db.add_event(ts, kind, level, html, data, agent)
+        ev = Event(eid, ts, kind, level, html, data, agent)
         for sink in list(self.sinks):
             try:
                 sink.deliver(ev)

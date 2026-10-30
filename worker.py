@@ -7,8 +7,9 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from agent import Agent
+from agent import Job, MAIN_PROMPT, access_rules, BASE_RULES
 from db import today
+from fleet import AgentBuilder, Fleet, Spawner
 from textfmt import h, truncate
 
 if TYPE_CHECKING:
@@ -45,7 +46,14 @@ class Worker:
         self.changed = asyncio.Event()       # new task / resume / goal change
         self.current: dict | None = None
         self.inner: asyncio.Task | None = None
-        self.agent = Agent(cfg, db, llm, hub, approvals.request, self.wait_if_paused, self._on_step)
+        self._main_task_id = 0
+        self.fleet = Fleet(hub)
+        self.fleet.register("main", "main", None, "idle", cfg.max_steps_per_task)
+        self.fleet.set_main_status("idle")
+        self.builder = AgentBuilder(cfg, db, llm, hub, approvals, self.wait_if_paused, self.fleet)
+        self.spawner = Spawner(self.fleet, self.builder, cfg, lambda: self._main_task_id)
+        use_spawner = self.spawner if (cfg.max_workers > 0 or cfg.review) else None
+        self.agent = self.builder.build("main", "main", spawner=use_spawner)
 
     # state ------------------------------------------------------------------------
     def poke(self) -> None:
@@ -114,14 +122,10 @@ class Worker:
             except asyncio.TimeoutError:
                 pass
 
-    def _on_step(self, step: int, narration: str) -> None:
-        if self.current:
-            self.current["step"] = step
-            self.current["action"] = narration
-
     # control ----------------------------------------------------------------------
     def stop_current(self) -> int | None:
         if self.inner and not self.inner.done() and self.current:
+            self.fleet.cancel_all_children()   # stop helpers/reviewers too
             self.inner.cancel()
             return self.current["id"]
         return None
@@ -179,27 +183,39 @@ class Worker:
                               for r in self.db.recent_goal_results(5)) or "(none yet)"
         self.db.add_task(GOAL_PROMPT.format(goal=goal, cycle=cycle, history=history), kind="goal")
 
+    def _build_job(self, task: dict) -> Job:
+        return Job(task_id=task["id"], description=task["description"], kind=task["kind"],
+                   system=self.builder.prompt(MAIN_PROMPT, self.cfg.max_steps_per_task),
+                   max_steps=self.cfg.max_steps_per_task, persist=True, recap=True,
+                   messages=self.db.load_messages(task),
+                   steps=task.get("steps") or 0, tokens=task.get("tokens") or 0)
+
     async def _run(self, task: dict) -> None:
         tid = task["id"]
+        self._main_task_id = tid
         self.db.start_task(tid)
         self.current = {"id": tid, "kind": task["kind"], "description": task["description"],
-                        "step": task.get("steps") or 0, "action": "", "started": time.time()}
+                        "started": time.time()}
         if task["kind"] == "goal":
             title = f"🎯 Goal cycle (task #{tid}): {h(truncate(self.db.get('goal') or '', 200))}"
         else:
             title = f"▶️ Task #{tid}: {h(truncate(task['description'], 300))}"
+        self.fleet.set_main_status("working", f"#{tid}: {truncate(task['description'], 120)}")
         self.hub.emit(title, kind="task", level="always", task_id=tid, state="started",
                       description=task["description"], task_kind=task["kind"])
         log.info("task %s started", tid)
-        self.inner = asyncio.create_task(self.agent.run(task), name=f"task-{tid}")
+        self.inner = asyncio.create_task(self.agent.run(self._build_job(task)), name=f"task-{tid}")
         try:
             await asyncio.wait({self.inner})
         except asyncio.CancelledError:   # service shutting down: leave it 'running' to resume later
+            self.fleet.cancel_all_children()
             self.inner.cancel()
             await asyncio.gather(self.inner, return_exceptions=True)
             raise
         finally:
             self.current = None
+            self._reap_children()
+            self.fleet.set_main_status("idle")
 
         if self.inner.cancelled():
             self.db.finish_task(tid, "aborted", "aborted by user")
@@ -220,6 +236,7 @@ class Worker:
             self.hub.emit(head + h(out.summary), kind="final", task_id=tid, status=out.status,
                           summary=out.summary, steps=out.steps, tokens=out.tokens)
             log.info("task %s finished: %s", tid, out.status)
+            await self._auto_review(task, out)
         self.inner = None
 
         if task["kind"] == "goal":
@@ -229,18 +246,48 @@ class Worker:
                 self.db.set("goal", None)
                 self.hub.emit("🎉 Standing goal reported complete — goal cleared.", kind="alert")
 
+    def _reap_children(self) -> None:
+        """Cancel any helper/reviewer the lead left running, then forget finished ones."""
+        for aid, t in list(self.fleet.tasks.items()):
+            if not t.done():
+                t.cancel()
+            else:
+                self.fleet.tasks.pop(aid, None)
+
+    async def _auto_review(self, task: dict, out) -> None:
+        if not self.cfg.review or out.status != "done" or task["kind"] != "task":
+            return
+        if self.paused or self.budget_exceeded():
+            return
+        subject = (f"Task given to the lead agent:\n{truncate(task['description'], 800)}\n\n"
+                   f"The lead agent reported it done:\n{truncate(out.summary, 1500)}\n\n"
+                   "Inspect the actual result (files in WORKDIR, command output) and judge whether "
+                   "the task was completed correctly, completely and safely.")
+        try:
+            res = await self.spawner.review(subject, "main")
+            self.hub.emit(f"🔎 <b>Review of task #{task['id']}</b>\n{h(truncate(res.output, 1500))}",
+                          kind="review", level="always", agent="main", task_id=task["id"])
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("auto-review failed")
+        finally:
+            self._reap_children()
+
     # reporting ------------------------------------------------------------------------
     def status_dict(self) -> dict:
         u = self.db.usage_today()
         cur = None
         if self.current:
             c = self.current
+            m = self.fleet.agents.get("main", {})
             cur = {"id": c["id"], "kind": c["kind"], "description": c["description"],
-                   "step": c["step"], "action": c["action"], "started": c["started"]}
+                   "step": m.get("step", 0), "action": m.get("action", ""), "started": c["started"]}
         return {
             "state": "paused" if self.paused else ("working" if self.current else "idle"),
             "pause_reason": self.pause_reason,
             "current": cur,
+            "fleet": self.fleet.snapshot(),
             "max_steps": self.cfg.max_steps_per_task,
             "queue": self.db.pending(50),
             "queue_count": self.db.count_pending(),
@@ -255,6 +302,8 @@ class Worker:
             "workdir": str(self.cfg.workdir),
             "access": "full" if self.cfg.full_access else "workdir only",
             "approvals": self.cfg.approvals,
+            "max_workers": self.cfg.max_workers,
+            "review": self.cfg.review,
         }
 
     def status_html(self) -> str:
@@ -269,12 +318,17 @@ class Worker:
         lines = [f"<b>Status:</b> {state}"]
         if self.current:
             c = self.current
+            m = self.fleet.agents.get("main", {})
             name = "goal cycle" if c["kind"] == "goal" else "task"
             mins = (time.time() - c["started"]) / 60
             lines.append(f"<b>Current:</b> {name} #{c['id']} — {h(truncate(c['description'], 200))}")
-            lines.append(f"<b>Step:</b> {c['step']}/{self.cfg.max_steps_per_task} · {mins:.0f} min")
-            if c["action"]:
-                lines.append(f"<b>Last action:</b> {c['action']}")
+            lines.append(f"<b>Step:</b> {m.get('step', 0)}/{self.cfg.max_steps_per_task} · {mins:.0f} min")
+            if m.get("action"):
+                lines.append(f"<b>Last action:</b> {m['action']}")
+        helpers = [a for a in self.fleet.snapshot() if a["role"] != "main" and a["status"] == "working"]
+        if helpers:
+            lines.append(f"<b>Helpers active:</b> {len(helpers)} "
+                         f"({', '.join(h(a['id']) for a in helpers)})")
         lines.append(f"<b>Queue:</b> {self.db.count_pending()} pending")
         goal = self.db.get("goal")
         lines.append(f"<b>Goal:</b> {h(truncate(goal, 200)) if goal else '—'}")

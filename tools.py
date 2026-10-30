@@ -26,7 +26,7 @@ class ToolResult:
     denied: bool = False
 
 
-TOOL_SPECS = [
+BASE_TOOL_SPECS = [
     {"type": "function", "function": {
         "name": "shell",
         "description": "Run a bash command inside WORKDIR (the current directory). Returns exit "
@@ -69,6 +69,35 @@ TOOL_SPECS = [
         "description": "Send the human a short free-form progress note on Telegram.",
         "parameters": {"type": "object", "properties": {
             "text": {"type": "string"}}, "required": ["text"]}}},
+]
+
+# Advertised only to the lead agent, and only when delegation is enabled.
+WORKER_TOOL_SPECS = [
+    {"type": "function", "function": {
+        "name": "spawn_worker",
+        "description": "Start a helper agent that works in parallel on a focused sub-task and "
+                       "reports back. It cannot spawn further helpers. Returns its agent id so you "
+                       "can wait_for_workers on it. Keep helpers few and purposeful.",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "short label, e.g. 'scan logs'"},
+            "instructions": {"type": "string", "description": "self-contained task for the helper"}},
+            "required": ["title", "instructions"]}}},
+    {"type": "function", "function": {
+        "name": "wait_for_workers",
+        "description": "Wait for helper agents you spawned to finish and return their reports.",
+        "parameters": {"type": "object", "properties": {
+            "agent_ids": {"type": "array", "items": {"type": "string"},
+                          "description": "ids returned by spawn_worker; empty = all your helpers"}}}}},
+]
+
+REVIEW_TOOL_SPECS = [
+    {"type": "function", "function": {
+        "name": "request_review",
+        "description": "Ask the review agent to inspect some work and return a verdict (APPROVED / "
+                       "CHANGES NEEDED) with reasons. Use before finishing something important.",
+        "parameters": {"type": "object", "properties": {
+            "subject": {"type": "string", "description": "what to review and where to look"}},
+            "required": ["subject"]}}},
 ]
 
 
@@ -143,7 +172,8 @@ UpdateFn = Callable[[str], None]
 
 class Tools:
     def __init__(self, workdir: Path, secrets: list[str], approve: ApproveFn, update: UpdateFn,
-                 default_shell_timeout: int = 120, full_access: bool = False, approvals: bool = True):
+                 default_shell_timeout: int = 120, full_access: bool = False, approvals: bool = True,
+                 agent_id: str = "main", spawner=None):
         self.workdir = workdir
         self.secrets = secrets
         self.approve = approve
@@ -151,6 +181,17 @@ class Tools:
         self.default_shell_timeout = default_shell_timeout
         self.full_access = full_access
         self.approvals = approvals
+        self.agent_id = agent_id
+        self.spawner = spawner            # set only for agents allowed to delegate (the lead)
+
+    def specs(self) -> list[dict]:
+        specs = list(BASE_TOOL_SPECS)
+        if self.spawner:
+            if getattr(self.spawner, "can_spawn", True):
+                specs += WORKER_TOOL_SPECS
+            if getattr(self.spawner, "can_review", True):
+                specs += REVIEW_TOOL_SPECS
+        return specs
 
     def _path(self, path: str) -> Path:
         return resolve_in_workdir(self.workdir, path, self.full_access)
@@ -181,7 +222,7 @@ class Tools:
         timeout = max(1, min(int(timeout or self.default_shell_timeout), 1800))
         reason = danger_reason(command, self.workdir, self.full_access) if self.approvals else None
         if reason:
-            if not await self.approve(command, reason):
+            if not await self.approve(command, reason, self.agent_id):
                 return ToolResult(False, "error: the human DENIED this command. Do not retry it; "
                                   "find a safer alternative or explain why it is needed.",
                                   "denied by you", denied=True)
@@ -299,3 +340,19 @@ class Tools:
     async def t_send_update(self, text: str) -> ToolResult:
         self.update(text)
         return ToolResult(True, "sent", "sent")
+
+    # delegation (only present when a spawner is attached) --------------------
+    async def t_spawn_worker(self, title: str, instructions: str) -> ToolResult:
+        if not self.spawner:
+            return ToolResult(False, "error: delegation is not available to this agent", "no delegation")
+        return await self.spawner.spawn(title, instructions, self.agent_id)
+
+    async def t_wait_for_workers(self, agent_ids: list | None = None) -> ToolResult:
+        if not self.spawner:
+            return ToolResult(False, "error: delegation is not available to this agent", "no delegation")
+        return await self.spawner.wait(agent_ids or [], self.agent_id)
+
+    async def t_request_review(self, subject: str) -> ToolResult:
+        if not self.spawner:
+            return ToolResult(False, "error: review is not available to this agent", "no review")
+        return await self.spawner.review(subject, self.agent_id)

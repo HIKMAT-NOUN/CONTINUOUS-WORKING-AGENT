@@ -15,7 +15,7 @@ KEYS = (
     "WORKDIR", "GOAL_INTERVAL", "MAX_STEPS_PER_TASK", "DAILY_TOKEN_BUDGET",
     "PRICE_INPUT_PER_M", "PRICE_OUTPUT_PER_M",
     "APPROVAL_TIMEOUT", "SHELL_TIMEOUT", "LLM_TIMEOUT", "DB_PATH", "LOG_DIR",
-    "DEFAULT_VERBOSE", "WEB_ENABLED", "WEB_HOST", "WEB_PORT", "WEB_TOKEN", "ACCESS", "APPROVALS", "PROGRESS_EVERY",
+    "DEFAULT_VERBOSE", "WEB_ENABLED", "WEB_HOST", "WEB_PORT", "WEB_TOKEN", "ACCESS", "APPROVALS", "PROGRESS_EVERY", "MAX_WORKERS", "WORKER_MAX_STEPS", "REVIEW", "REVIEW_MAX_STEPS",
 )
 
 
@@ -49,6 +49,10 @@ class Config:
     full_access: bool = False   # ACCESS=full: tools may touch any path on the machine
     approvals: bool = True      # APPROVALS=off: never ask, run every command
     progress_every: int = 5     # plain-language recap every N steps (0 disables)
+    max_workers: int = 3        # max helper agents the lead may run at once
+    worker_max_steps: int = 25  # step cap for a helper agent
+    review: bool = True         # auto-review each completed task with the review agent
+    review_max_steps: int = 15  # step cap for the review agent
 
     @property
     def telegram_enabled(self) -> bool:
@@ -124,6 +128,10 @@ def load_config(env_file: Path | None = None) -> Config:
         full_access=(v.get("ACCESS", "workdir").strip().lower() == "full"),
         approvals=(v.get("APPROVALS", "on").strip().lower() not in ("0", "false", "no", "off")),
         progress_every=max(0, int(v.get("PROGRESS_EVERY") or 5)),
+        max_workers=max(0, int(v.get("MAX_WORKERS") or 3)),
+        worker_max_steps=max(1, int(v.get("WORKER_MAX_STEPS") or 25)),
+        review=(v.get("REVIEW", "on").strip().lower() not in ("0", "false", "no", "off")),
+        review_max_steps=max(1, int(v.get("REVIEW_MAX_STEPS") or 15)),
     )
 
 

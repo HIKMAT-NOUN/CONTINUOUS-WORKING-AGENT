@@ -14,8 +14,10 @@ from hub import Hub
 from worker import Worker
 
 
+_call_seq = [0]
 def call(name, **args):
-    return {"id": f"c_{name}", "type": "function",
+    _call_seq[0] += 1
+    return {"id": f"c{_call_seq[0]}_{name}", "type": "function",
             "function": {"name": name, "arguments": json.dumps(args)}}
 
 
@@ -43,7 +45,7 @@ def cfg(tmp_path):
         (wd / n).write_text("x")
     return Config(api_base_url="http://x", api_key="sk-supersecret", model="m",
                   telegram_bot_token="123:tokensecret", allowed_user_id=1, workdir=wd,
-                  db_path=tmp_path / "t.db", log_dir=tmp_path / "logs")
+                  db_path=tmp_path / "t.db", log_dir=tmp_path / "logs", review=False)
 
 
 class Collector:
@@ -68,9 +70,10 @@ def build(cfg, llm, approve=True):
     hub.subscribe(bot)
     ap = Approvals(hub, 5)
     w = Worker(cfg, db, llm, hub, ap)
-    async def auto(cmd, reason):
+    async def auto(cmd, reason, agent_id="main"):
         return approve
     w.agent.tools.approve = auto
+    w.approvals.request = auto
     return db, bot, n, w
 
 
@@ -139,7 +142,7 @@ async def test_step_limit_and_stop(cfg):
     llm.script = [("", [call("shell", command="sleep 30")])]
     db.add_task("slow")
     w.poke()
-    await run_until(lambda: w.current and w.current["id"] == 2 and w.current["step"] == 1)
+    await run_until(lambda: w.current and w.current["id"] == 2 and w.fleet.agents["main"]["step"] == 1)
     await asyncio.sleep(0.2)
     assert w.stop_current() == 2
     await run_until(lambda: db.get_task(2)["status"] == "aborted")
@@ -214,3 +217,62 @@ async def test_periodic_recap(cfg):
     wt.cancel()
     recaps = [e for e in bot.sent if e["kind"] == "progress"]
     assert [r["data"]["text"] for r in recaps] == ["Looked around twice.", "Halfway through."]
+
+
+async def test_spawn_workers_and_review(cfg):
+    """Lead spawns two helpers, waits for them, then a reviewer — all visible as agents."""
+    from dataclasses import replace
+    cfg = replace(cfg, review=False, max_workers=3)
+    # Lead script: spawn two, wait, then finish. Helpers each do one list_dir then report.
+    # ScriptedLLM is shared, so interleaving is nondeterministic; drive each agent by routing
+    # on the system prompt instead.
+    class RoleLLM:
+        def __init__(self):
+            self.seen = []
+            self.lead_step = 0
+        async def chat(self, messages, tools=None):
+            self.seen.append(list(messages))
+            role_sys = messages[0]["content"]
+            if "You are a helper agent spawned" in role_sys:
+                # a helper: do nothing, just report
+                return LLMResponse({"role": "assistant", "content": "helper done: found files"},
+                                   "helper done: found files", [], 50, 10)
+            if "You are the review agent." in role_sys:
+                return LLMResponse({"role": "assistant", "content": "VERDICT: APPROVED looks fine"},
+                                   "VERDICT: APPROVED looks fine", [], 50, 10)
+            # the lead
+            self.lead_step += 1
+            if self.lead_step == 1:
+                calls = [call("spawn_worker", title="A", instructions="scan A"),
+                         call("spawn_worker", title="B", instructions="scan B")]
+                return LLMResponse({"role": "assistant", "content": "Delegating two scans.",
+                                    "tool_calls": calls}, "Delegating two scans.", calls, 100, 20)
+            if self.lead_step == 2:
+                c = [call("wait_for_workers", agent_ids=[])]
+                return LLMResponse({"role": "assistant", "content": "Waiting.", "tool_calls": c},
+                                   "Waiting.", c, 100, 20)
+            if self.lead_step == 3:
+                c = [call("request_review", subject="the scans")]
+                return LLMResponse({"role": "assistant", "content": "Reviewing.", "tool_calls": c},
+                                   "Reviewing.", c, 100, 20)
+            return LLMResponse({"role": "assistant", "content": "Both scans done and approved."},
+                               "Both scans done and approved.", [], 100, 20)
+
+    llm = RoleLLM()
+    db, bot, n, w = build(cfg, llm)
+    # spawn tool ids must be unique per call; patch call() ids
+    db.add_task("investigate with helpers")
+    wt = asyncio.create_task(w.run_forever())
+    await run_until(lambda: db.get_task(1)["status"] == "done", timeout=10)
+    wt.cancel()
+    await asyncio.gather(wt, return_exceptions=True)
+
+    snap = {a["id"]: a for a in w.fleet.snapshot()}
+    roles = sorted(a["role"] for a in snap.values())
+    assert roles.count("worker") == 2 and roles.count("reviewer") == 1 and "main" in snap
+    assert all(a["status"] in ("done", "idle") for a in snap.values())
+    # events are tagged by agent
+    agents_in_events = {e["data"].get("agent") for e in bot.sent if e["kind"] == "agent"}
+    assert any(aid.startswith("w") for aid in snap) and any(aid.startswith("r") for aid in snap)
+    # steps were logged per-agent
+    assert {s["agent"] for s in db.last_steps(50)} >= {"main"}

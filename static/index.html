@@ -144,6 +144,39 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; }
 .kv div:nth-child(odd) { color: var(--muted); }
 
+/* fleet tree */
+.fleet { display: flex; flex-direction: column; gap: 6px; }
+.fleethint { font-size: 11.5px; margin-top: 8px; }
+.anode { border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; cursor: pointer;
+  border-left: 3px solid var(--ac); background: var(--panel-2); transition: background .15s; }
+.anode:hover { background: var(--panel); }
+.anode.sel { background: var(--panel); box-shadow: 0 0 0 2px var(--ac) inset; }
+.anode.child { margin-left: 16px; position: relative; }
+.anode.child::before { content: ""; position: absolute; left: -10px; top: -4px; bottom: 50%;
+  width: 10px; border-left: 2px solid var(--border); border-bottom: 2px solid var(--border);
+  border-bottom-left-radius: 6px; }
+.anode .top { display: flex; align-items: center; gap: 7px; }
+.anode .nm { font-weight: 600; font-size: 13px; }
+.anode .role { color: var(--ac); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.anode .tag { margin-left: auto; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.anode .ttl { color: var(--muted); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.anode .act { font-size: 12px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; gap: 6px; align-items: center; }
+.anode .think { font-size: 11.5px; color: var(--muted); font-style: italic; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sdot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--muted); }
+.sdot.working { background: var(--ac); animation: pulse 1.4s infinite; }
+.sdot.done { background: var(--ok); } .sdot.failed, .sdot.aborted { background: var(--err); }
+.sdot.idle { background: var(--muted); opacity: .5; }
+
+/* agent-colored feed rows */
+.ev .achip { display: none; font-size: 10.5px; padding: 0 6px; border-radius: 999px; margin-right: 6px;
+  color: #fff; vertical-align: 1px; }
+.show-agents .ev[data-agent]:not([data-agent="main"]) { border-left: 2px solid var(--arow); padding-left: 8px; margin-left: -10px; }
+.show-agents .ev[data-agent]:not([data-agent="main"]) .achip { display: inline-block; background: var(--arow); }
+.ev.hidden-agent { display: none !important; }
+.agentbar { display: none; align-items: center; gap: 8px; padding: 6px 16px; background: color-mix(in srgb, var(--accent) 10%, var(--panel)); border-bottom: 1px solid var(--border); font-size: 13px; }
+.agentbar.on { display: flex; }
+.agentbar button { padding: 3px 9px; font-size: 12px; }
+
 dialog { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text);
   width: min(820px, 94vw); max-height: 86vh; padding: 0; }
 dialog::backdrop { background: rgba(0,0,0,.45); }
@@ -186,8 +219,16 @@ dialog .db { padding: 12px 16px; overflow: auto; max-height: calc(86vh - 56px); 
           <button class="chip on" data-filter="all">All activity</button>
           <button class="chip" data-filter="key" title="Show only plans, recaps, approvals and results">Summary</button>
         </div>
+        <label class="count" style="display:flex;gap:6px;align-items:center;cursor:pointer" title="Tint each line by which agent produced it">
+          <input type="checkbox" id="showAgents" style="width:auto" checked> color by agent
+        </label>
         <div class="grow"></div>
         <span class="count" id="feedCount"></span>
+      </div>
+      <div class="agentbar" id="agentbar">
+        <span id="agentbarText"></span>
+        <div class="grow" style="flex:1"></div>
+        <button id="agentbarClear">Show all agents</button>
       </div>
       <div class="approvals" id="approvals"></div>
       <div class="feed" id="feed"></div>
@@ -201,6 +242,11 @@ dialog .db { padding: 12px 16px; overflow: auto; max-height: calc(86vh - 56px); 
       </div>
     </section>
     <aside>
+      <div class="card" id="fleetCard">
+        <h2>Agents <span class="muted" id="fleetCount"></span></h2>
+        <div id="fleet" class="fleet"></div>
+        <div class="fleethint muted">Click an agent to show only its activity.</div>
+      </div>
       <div class="card">
         <h2>Controls</h2>
         <div class="btns">
@@ -287,6 +333,21 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
 
+// --- agents / colors ---------------------------------------------------------------------
+const AGENT_PALETTE = ["#22c55e", "#a855f7", "#14b8a6", "#ec4899", "#f59e0b", "#06b6d4", "#ef4444", "#84cc16"];
+const agentMeta = {};        // id -> { role, color, label }
+let colorCursor = 0;
+let agentFilter = null;      // id or null
+function metaFor(id, role) {
+  let m = agentMeta[id];
+  if (!m) {
+    const color = id === "main" ? "var(--accent)" : AGENT_PALETTE[colorCursor++ % AGENT_PALETTE.length];
+    m = agentMeta[id] = { role: role || (id === "main" ? "main" : "worker"), color, label: id };
+  }
+  if (role) m.role = role;
+  return m;
+}
+
 // --- feed --------------------------------------------------------------------------------
 let evCount = 0, unread = 0, baseTitle = document.title;
 function nearBottom() { return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80; }
@@ -300,12 +361,22 @@ function updateJump() {
   badge.textContent = unread > 99 ? "99+" : unread;
   document.title = unread ? `(${unread}) ${baseTitle}` : baseTitle;
 }
-function addRow(kind, ts, node, extraClass) {
+function addRow(kind, ts, node, extraClass, agent) {
   const stick = nearBottom();
   const row = document.createElement("div");
   row.className = `ev ${kind} ${extraClass || ""}`;
+  agent = agent || "main";
+  const m = metaFor(agent);
+  row.dataset.agent = agent;
+  row.style.setProperty("--arow", m.color);
+  if (agentFilter && agent !== agentFilter) row.classList.add("hidden-agent");
   const t = document.createElement("div"); t.className = "ts"; t.textContent = fmtTime(ts);
-  const b = document.createElement("div"); b.className = "body"; b.appendChild(node);
+  const b = document.createElement("div"); b.className = "body";
+  if (agent !== "main") {
+    const chip = document.createElement("span"); chip.className = "achip"; chip.textContent = agent;
+    b.appendChild(chip);
+  }
+  b.appendChild(node);
   row.append(t, b);
   feed.appendChild(row);
   while (feed.children.length > 1500) feed.removeChild(feed.firstChild);
@@ -322,27 +393,43 @@ document.querySelectorAll(".chip").forEach((c) => c.onclick = () => {
   feed.classList.toggle("filter-key", c.dataset.filter === "key");
   if (nearBottom()) toBottom();
 });
+const showAgents = $("showAgents");
+function applyShowAgents() { feed.classList.toggle("show-agents", showAgents.checked); }
+showAgents.onchange = applyShowAgents; feed.classList.add("show-agents");
+function setAgentFilter(id) {
+  agentFilter = id;
+  feed.querySelectorAll(".ev").forEach((r) => r.classList.toggle("hidden-agent", !!id && r.dataset.agent !== id));
+  const bar = $("agentbar");
+  bar.classList.toggle("on", !!id);
+  if (id) $("agentbarText").innerHTML = `Showing only <b>${esc(id)}</b> (${esc((agentMeta[id] || {}).role || "")})`;
+  document.querySelectorAll(".anode").forEach((n) => n.classList.toggle("sel", n.dataset.id === id));
+  if (nearBottom()) toBottom();
+}
+$("agentbarClear").onclick = () => setAgentFilter(null);
 function addEvent(ev) {
   if (ev.id <= lastId) return;
   lastId = ev.id;
-  if (ev.kind === "approval") { showApproval(ev.data); }
+  const agent = ev.agent || "main";
+  if (ev.kind === "agent") metaFor(agent, ev.data.role);   // register colour early
+  if (ev.kind === "approval") { showApproval(ev.data, agent); }
   if (ev.kind === "approval_done") { hideApproval(ev.data.aid); }
   if (ev.kind === "output") {
     const d = document.createElement("details");
     const s = document.createElement("summary"); s.textContent = `output of step ${ev.data.step ?? ""}`;
     const p = document.createElement("pre"); p.textContent = ev.data.output || "";
     d.append(s, p);
-    addRow("output", ev.ts, d);
+    addRow("output", ev.ts, d, "", agent);
     return;
   }
-  addRow(ev.kind, ev.ts, safeHTML(ev.html));
+  addRow(ev.kind, ev.ts, safeHTML(ev.html), "", agent);
   if (ev.kind === "final") {
     const st = ev.data.status || "";
     const map = { done: ["ok", "🏁 Task done"], failed: ["bad", "⚠️ Task stopped"], aborted: ["bad", "🛑 Task aborted"] };
     const [cls, label] = map[st] || ["", "Task update"];
     toast(cls, label, (ev.data.summary || "").split("\n").filter(Boolean)[0] || "");
   }
-  if (["task", "final", "result", "step"].includes(ev.kind)) scheduleState();
+  if (ev.kind === "review") toast("ok", "🔎 Review ready", (ev.data && ev.data.task_id) ? "Task #" + ev.data.task_id : "");
+  if (["task", "final", "result", "step", "agent", "review"].includes(ev.kind)) scheduleState();
 }
 
 function toast(cls, title, sub) {
@@ -365,11 +452,15 @@ function applyFriendly() {
 friendly.onchange = applyFriendly; applyFriendly();
 
 // --- approvals ---------------------------------------------------------------------------
-function showApproval(a) {
+function showApproval(a, agent) {
   if (approvalsShown.has(a.aid)) return;
+  agent = agent || a.agent || "main";
+  const m = metaFor(agent);
+  const who = agent === "main" ? "" : ` <span class="achip" style="display:inline-block;background:${m.color}">${esc(agent)}</span>`;
   const box = document.createElement("div");
   box.className = "approval";
-  box.innerHTML = `<b>⚠️ Approval needed</b> <span class="muted">[${esc(a.aid)}]</span>
+  box.style.borderLeft = `4px solid ${m.color}`;
+  box.innerHTML = `<b>⚠️ Approval needed</b> <span class="muted">[${esc(a.aid)}]</span>${who}
     <div class="cmd"><pre>${esc(a.command)}</pre></div>
     <div class="muted">${esc(a.reason)}</div>
     <div class="actions"><button class="ok">✅ Approve</button><button class="danger">❌ Deny</button></div>`;
@@ -478,14 +569,47 @@ async function loadState() {
     d.onclick = () => openTask(t.id);
     $("recent").appendChild(d);
   }
-  for (const a of j.pending_approvals) showApproval(a);
+  for (const a of j.pending_approvals) showApproval(a, a.agent);
   for (const aid of [...approvalsShown.keys()]) if (!j.pending_approvals.some((a) => a.aid === aid)) hideApproval(aid);
 
-  $("info").innerHTML = `<div>Workdir</div><div><code>${esc(s.workdir)}</code></div>
+  renderFleet(s.fleet || []);
+
+  $("info").innerHTML = `<div>Workdir</div><div><code>${esc(s.workdir)}</code></div>`+`
     <div>Access</div><div>${esc(s.access)} · approvals ${s.approvals ? "on" : "off"}</div>
     <div>Max steps</div><div>${s.max_steps}</div><div>Goal every</div><div>${s.goal_interval_min} min</div>
+    <div>Helpers</div><div>max ${s.max_workers ?? "—"} · review ${s.review ? "on" : "off"}</div>
     <div>Tokens in/out</div><div>${fmtTok(s.prompt_tokens)} / ${fmtTok(s.completion_tokens)}</div>`;
 }
+
+const ROLE_ICON = { main: "🧠", worker: "🤖", reviewer: "🔎" };
+function renderFleet(fleet) {
+  const host = $("fleet");
+  const active = fleet.filter((a) => a.status === "working" && a.role !== "main").length;
+  $("fleetCount").textContent = `(${fleet.length}${active ? ", " + active + " active" : ""})`;
+  host.innerHTML = "";
+  for (const a of fleet) {
+    const m = metaFor(a.id, a.role);
+    const node = document.createElement("div");
+    node.className = "anode" + (a.role !== "main" ? " child" : "") + (agentFilter === a.id ? " sel" : "");
+    node.dataset.id = a.id;
+    node.style.setProperty("--ac", m.color);
+    const stepTxt = a.status === "working" ? `${a.step}/${a.max_steps}` : a.status;
+    const think = a.status === "working" && a.thinking ? `<div class="think">🧠 ${esc(a.thinking)}</div>` : "";
+    const actTxt = a.status === "working"
+      ? (a.action ? safeHTMLString(a.action) : "working…")
+      : (a.role === "main" ? "idle" : (a.result ? esc(a.result.split("\n")[0]).slice(0, 120) : a.status));
+    node.innerHTML =
+      `<div class="top"><span class="sdot ${esc(a.status)}"></span>` +
+      `<span class="nm">${ROLE_ICON[a.role] || "•"} ${esc(a.id)}</span>` +
+      `<span class="role">${esc(a.role)}</span><span class="tag">${esc(stepTxt)}</span></div>` +
+      (a.title ? `<div class="ttl">${esc(a.title)}</div>` : "") +
+      `<div class="act">${actTxt}</div>${think}`;
+    node.onclick = () => setAgentFilter(agentFilter === a.id ? null : a.id);
+    host.appendChild(node);
+  }
+}
+// render a tiny HTML subset to a string safely (for the action line in the fleet panel)
+function safeHTMLString(html) { const d = safeHTML(html); const w = document.createElement("div"); w.appendChild(d); return w.innerHTML; }
 
 async function openTask(id) {
   const r = await fetch(`/api/tasks/${id}`); if (!r.ok) return;
@@ -508,7 +632,7 @@ async function openTask(id) {
 }
 
 connect();
-setInterval(loadState, 3000);
+setInterval(loadState, 1500);
 </script>
 </body>
 </html>

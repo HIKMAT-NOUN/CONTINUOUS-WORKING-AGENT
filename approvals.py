@@ -18,14 +18,14 @@ class Approvals:
         self.timeout = timeout
         self.pending: dict[str, dict] = {}   # aid -> {"future", "command", "reason"}
 
-    async def request(self, command: str, reason: str) -> bool:
+    async def request(self, command: str, reason: str, agent_id: str = "main") -> bool:
         aid = secrets.token_hex(3)
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        self.pending[aid] = {"future": fut, "command": command, "reason": reason}
+        self.pending[aid] = {"future": fut, "command": command, "reason": reason, "agent": agent_id}
         self.hub.emit(f"⚠️ <b>Approval needed</b> [{aid}]\n{code(command, 1500)}\nReason: {h(reason)}\n"
                       f"(auto-deny in {self.timeout // 60} min)",
-                      kind="approval", level="always", aid=aid, command=command, reason=reason,
-                      timeout=self.timeout)
+                      kind="approval", level="always", agent=agent_id, aid=aid, command=command,
+                      reason=reason, timeout=self.timeout)
         log.info("approval %s requested: %s (%s)", aid, command, reason)
         try:
             ok = await asyncio.wait_for(asyncio.shield(fut), self.timeout)
@@ -44,7 +44,8 @@ class Approvals:
             return
         verdict = "✅ approved" if ok else "❌ denied"
         self.hub.emit(f"{verdict} [{aid}] ({h(by)}): {code(item['command'], 200)}",
-                      kind="approval_done", level="always", aid=aid, approved=ok, by=by)
+                      kind="approval_done", level="always", agent=item.get("agent", "main"),
+                      aid=aid, approved=ok, by=by)
         log.info("approval %s -> %s by %s", aid, verdict, by)
 
     def resolve(self, aid: str, approved: bool, by: str = "user") -> bool:

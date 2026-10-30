@@ -110,7 +110,8 @@ def make_app(token: str, db: "DB", hub: Hub, worker: "Worker", commands: "Comman
         return web.json_response({"status": worker.status_dict(),
                                   "recent": db.recent_tasks(15),
                                   "pending_approvals": [
-                                      {"aid": a, "command": p["command"], "reason": p["reason"]}
+                                      {"aid": a, "command": p["command"], "reason": p["reason"],
+                                       "agent": p.get("agent", "main")}
                                       for a, p in worker.approvals.pending.items()]})
 
     async def events(req: web.Request):

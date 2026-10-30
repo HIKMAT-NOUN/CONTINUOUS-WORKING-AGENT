@@ -151,6 +151,22 @@ Plain text without a leading `/` is added as a task.
 | `/verbose off\|steps\|full` | narration level for Telegram and the CLI |
 | `/log` | last 20 steps |
 
+## Multiple agents (lead, helpers, reviewer)
+The lead agent can delegate and get a second opinion, and you watch the whole team live:
+- **Helpers.** For a job with independent parts, the lead calls `spawn_worker` to start up
+  to `MAX_WORKERS` helper agents that work in parallel, then `wait_for_workers` to collect
+  their reports. Helpers cannot spawn further helpers (the tree is at most two deep).
+- **Review agent.** The lead can call `request_review`, and with `REVIEW=on` every finished
+  task is automatically checked by a review agent that inspects the result and returns a
+  verdict (APPROVED / CHANGES NEEDED).
+- **Shared limits.** Every agent draws on the one daily token budget, uses the one approval
+  channel (each approval card shows which agent asked), and is stopped together by `/stop`.
+- **In the dashboard.** The **Agents** panel shows the tree — lead at the top, helpers and
+  reviewers beneath — each with a live status dot, step counter, current action and current
+  thought. Click any agent to filter the feed to just its activity; feed lines are tinted by
+  which agent produced them. Turn delegation off with `MAX_WORKERS=0` and auto-review off
+  with `REVIEW=off`.
+
 ## Reading the feed
 - **Plain-language recaps.** Every `PROGRESS_EVERY` steps (default 5) the agent writes one
   friendly sentence (🧭) summarising what it's been doing, in between the raw command
@@ -224,8 +240,9 @@ telegram_ui.py  Telegram sink + handlers (only ALLOWED_USER_ID)
 notifier.py     rate-limited, merging, retrying Telegram sender
 commands.py     command processor shared by all interfaces
 hub.py          event hub: agent → every interface, redaction, event log
-worker.py       forever loop: queue, goal cycles, pause/budget, /stop, status
-agent.py        LLM ↔ tools loop and narration
+worker.py       forever loop: queue, goal cycles, pause/budget, /stop, auto-review, status
+fleet.py        multi-agent registry + the spawn_worker / wait_for_workers / request_review tools
+agent.py        LLM ↔ tools loop and narration (lead, helper and reviewer agents)
 tools.py        shell, read_file, write_file, list_dir, web_fetch, send_update
 safety.py       WORKDIR sandboxing + dangerous-command detection
 approvals.py    approval requests answered from any interface
