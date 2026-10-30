@@ -1,0 +1,24 @@
+# Installed by deploy/install.sh, which fills in User and paths.
+[Unit]
+Description=myagent - Telegram-controlled AI worker agent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=__DIR__/.venv/bin/python __DIR__/main.py
+Restart=always
+RestartSec=5
+# Give a running shell command a moment to be killed and the queue to flush on stop.
+TimeoutStopSec=20
+KillMode=mixed
+Environment=PYTHONUNBUFFERED=1
+# Light hardening; the agent can still write anywhere its user can.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

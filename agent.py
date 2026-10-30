@@ -1,0 +1,182 @@
+"""The agent loop for one task: LLM -> tool calls -> results -> LLM ... with live narration."""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Awaitable, Callable
+
+from llm import LLM, LLMError
+from notifier import Notifier, code, h, truncate
+from tools import TOOL_SPECS, Tools, first_line
+
+if TYPE_CHECKING:
+    from config import Config
+    from db import DB
+
+log = logging.getLogger("agent")
+
+SYSTEM_PROMPT = """You are an autonomous worker agent running 24/7 on a Linux server. A human \
+supervises you through Telegram and sees every tool call you make.
+
+Working directory (WORKDIR): {workdir}
+- shell() runs bash in WORKDIR. read_file/write_file/list_dir only work inside WORKDIR.
+- Risky shell commands (deleting recursively, sudo, touching paths outside WORKDIR, piping \
+downloads into a shell, ...) are sent to the human for approval. If one is denied, do not retry \
+it; find another way or explain why it is needed.
+- Before each batch of tool calls, write ONE short sentence saying what you are about to do \
+and why. It is shown to the human as your plan.
+- Use send_update for notable milestones in long tasks; don't spam it.
+- You have at most {max_steps} tool calls for this task. Be efficient.
+- When the task is complete (or cannot be completed), reply WITHOUT any tool call. That reply \
+is your final report to the human: state the result first, concisely, then key details.
+"""
+
+VERBOSITY = ("off", "steps", "full")
+
+
+@dataclass
+class Outcome:
+    status: str     # done | failed
+    summary: str
+    steps: int = 0
+    tokens: int = 0
+
+
+def describe_call(name: str, args: dict) -> str:
+    """The pre-call narration line."""
+    if name == "shell":
+        return f"⚙️ running: {code(args.get('command', ''), 400)}"
+    if name == "web_fetch":
+        return f"🌐 fetching: {h(truncate(args.get('url', ''), 400))}"
+    if name == "write_file":
+        verb = "appending" if args.get("append") else "writing"
+        return f"📄 {verb}: {code(args.get('path', ''), 200)}"
+    if name == "read_file":
+        return f"📖 reading: {code(args.get('path', ''), 200)}"
+    if name == "list_dir":
+        return f"📂 listing: {code(args.get('path') or '.', 200)}"
+    return f"🔧 {h(name)}: {code(json.dumps(args, ensure_ascii=False), 300)}"
+
+
+class Agent:
+    def __init__(self, cfg: "Config", db: "DB", llm: LLM, notifier: Notifier,
+                 approve: Callable[[str, str], Awaitable[bool]],
+                 wait_if_paused: Callable[[], Awaitable[None]],
+                 on_step: Callable[[int, str], None] | None = None):
+        self.cfg = cfg
+        self.db = db
+        self.llm = llm
+        self.notifier = notifier
+        self.wait_if_paused = wait_if_paused
+        self.on_step = on_step or (lambda n, s: None)
+        self.tools = Tools(cfg.workdir, cfg.secrets, approve, self._model_update, cfg.shell_timeout)
+
+    # narration helpers ----------------------------------------------------------
+    @property
+    def verbosity(self) -> str:
+        v = self.db.get("verbose", self.cfg.default_verbose)
+        return v if v in VERBOSITY else "steps"
+
+    def say(self, text_html: str, level: str = "steps") -> None:
+        """level: 'always' (finals, alerts), 'steps', or 'full'."""
+        v = self.verbosity
+        if level == "always" or (level == "steps" and v in ("steps", "full")) or (level == "full" and v == "full"):
+            self.notifier.send(text_html)
+
+    def _model_update(self, text: str) -> None:
+        if self.verbosity != "off":
+            self.notifier.send_plain(text, prefix_html="💬 ")
+
+    def account(self, prompt: int, completion: int, provider_cost: float | None) -> int:
+        cost = provider_cost if provider_cost is not None else (
+            prompt * self.cfg.price_input_per_m + completion * self.cfg.price_output_per_m) / 1e6
+        self.db.add_usage(prompt, completion, cost)
+        return prompt + completion
+
+    # main loop --------------------------------------------------------------------
+    async def run(self, task: dict) -> Outcome:
+        task_id = task["id"]
+        messages = self.db.load_messages(task)
+        steps, tokens = task.get("steps") or 0, task.get("tokens") or 0
+        if messages:
+            messages.append({"role": "user", "content": "(The agent process was restarted. "
+                             "Continue the task from where you left off; verify the state of "
+                             "anything that might have been interrupted.)"})
+        else:
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT.format(
+                    workdir=self.cfg.workdir, max_steps=self.cfg.max_steps_per_task)},
+                {"role": "user", "content": task["description"]},
+            ]
+
+        while True:
+            await self.wait_if_paused()  # also enforces the daily token budget
+            try:
+                resp = await self.llm.chat(messages, TOOL_SPECS)
+            except LLMError as e:
+                return Outcome("failed", f"LLM error: {e}", steps, tokens)
+            tokens += self.account(resp.prompt_tokens, resp.completion_tokens, resp.cost)
+            messages.append(resp.message)
+
+            if not resp.tool_calls:
+                self.db.save_progress(task_id, messages, steps, tokens)
+                return Outcome("done", resp.content.strip() or "(no final message)", steps, tokens)
+
+            if resp.content.strip():
+                self.say(f"🧠 thinking: {h(truncate(first_line(resp.content, 300), 300))}")
+
+            for tc in resp.tool_calls:
+                name = tc["function"]["name"]
+                if steps >= self.cfg.max_steps_per_task:
+                    messages.append({"role": "tool", "tool_call_id": tc["id"],
+                                     "content": "error: step limit reached, call not executed"})
+                    continue
+                steps += 1
+                try:
+                    args = json.loads(tc["function"]["arguments"] or "{}")
+                    if not isinstance(args, dict):
+                        raise ValueError("arguments must be a JSON object")
+                except ValueError as e:
+                    result_text = f"error: invalid JSON arguments: {e}"
+                    self.say(f"❌ {h(name)}: invalid arguments from model")
+                    self.db.log_step(task_id, steps, name, tc["function"]["arguments"], "error", result_text, 0)
+                    messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result_text})
+                    continue
+
+                narration = describe_call(name, args)
+                self.on_step(steps, narration)
+                if name != "send_update":
+                    self.say(narration)
+                t0 = time.monotonic()
+                res = await self.tools.call(name, args)
+                dt = time.monotonic() - t0
+                status = "denied" if res.denied else ("ok" if res.ok else "error")
+                self.db.log_step(task_id, steps, name, args, status, res.output, dt)
+                log.info("task %s step %s %s %s -> %s (%s)", task_id, steps, name,
+                         truncate(json.dumps(args, ensure_ascii=False), 300), status, res.summary)
+                if name != "send_update":
+                    icon = "✅ ok" if res.ok else ("🚫 denied" if res.denied else "❌ error")
+                    self.say(f"{icon}" + (f" — {h(truncate(res.summary, 300))}" if res.summary else ""))
+                    if self.verbosity == "full" and res.output:
+                        self.say(f"<pre>{h(truncate(res.output, 500))}</pre>", level="full")
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": res.output})
+
+            self.db.save_progress(task_id, messages, steps, tokens)
+
+            if steps >= self.cfg.max_steps_per_task:
+                summary, extra = await self._final_summary(messages)
+                return Outcome("failed", f"Step limit ({self.cfg.max_steps_per_task}) reached.\n\n{summary}",
+                               steps, tokens + extra)
+
+    async def _final_summary(self, messages: list[dict]) -> tuple[str, int]:
+        ask = messages + [{"role": "user", "content": "You have reached the step limit and cannot "
+                           "call more tools. Summarize what you accomplished and what remains."}]
+        try:
+            resp = await self.llm.chat(ask, None)
+            used = self.account(resp.prompt_tokens, resp.completion_tokens, resp.cost)
+            return resp.content.strip(), used
+        except LLMError as e:
+            return f"(could not get a summary: {e})", 0
