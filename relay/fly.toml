@@ -1,0 +1,16 @@
+# Deploy the relay to Fly.io: `fly launch --no-deploy` then set secrets and `fly deploy`.
+#   fly secrets set RELAY_AGENT_KEY=... RELAY_USER_TOKEN=...
+app = "my-agent-relay"
+primary_region = "cdg"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8900
+  force_https = true
+  auto_stop_machines = false      # keep it always on so the agent stays connected
+  min_machines_running = 1
+
+[[services.http_checks]]
+  path = "/healthz"

@@ -151,6 +151,23 @@ Plain text without a leading `/` is added as a task.
 | `/verbose off\|steps\|full` | narration level for Telegram and the CLI |
 | `/log` | last 20 steps |
 
+## Reaching it from your phone, from anywhere (no open port)
+The agent can dial **out** to a small relay you run on a public host, so a phone app (or any
+client) reaches it without opening a port or exposing your machine:
+
+```
+phone app  ──wss──►  relay (public)  ◄──wss──  agent (this machine, dials out)
+```
+
+- `relay/` is the public meeting point — deploy it once (Docker, systemd or Fly.io; its
+  README has the steps) and give it two secrets: `RELAY_AGENT_KEY` and `RELAY_USER_TOKEN`.
+- Point the agent at it in `.env` (`RELAY_URL`, `RELAY_AGENT_KEY`) and restart.
+- `android/` is a native Android app (Kotlin + Compose) that connects to the relay with the
+  user token and shows the live feed and agent tree — build it in Android Studio.
+
+Nothing listens for incoming connections on your machine; the agent keeps all its safety
+limits (approvals, budget, `/stop`). See `relay/README.md` and `android/README.md`.
+
 ## Multiple agents (lead, helpers, reviewer)
 The lead agent can delegate and get a second opinion, and you watch the whole team live:
 - **Helpers.** For a job with independent parts, the lead calls `spawn_worker` to start up
@@ -248,6 +265,7 @@ safety.py       WORKDIR sandboxing + dangerous-command detection
 approvals.py    approval requests answered from any interface
 llm.py          OpenAI-compatible client with retries
 db.py           SQLite: tasks, steps, events, settings, usage
+relay_client.py outbound client so a phone app can reach the agent with no open port
 config.py       .env loading + secret redaction
 deploy/         systemd unit + install script
 ```

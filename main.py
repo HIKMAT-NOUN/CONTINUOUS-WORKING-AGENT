@@ -80,7 +80,7 @@ TELEGRAM_COMMANDS = [("task", "add a task"), ("goal", "set/clear the standing go
                      ("verbose", "off | steps | full"), ("log", "last 20 steps")]
 
 
-async def amain(cfg: Config, db: DB, use_cli: bool, use_web: bool, use_telegram: bool) -> int:
+async def amain(cfg: Config, db: DB, use_cli: bool, use_web: bool, use_telegram: bool, use_relay: bool) -> int:
     hub = Hub(db, cfg.secrets, cfg.default_verbose)
     approvals = Approvals(hub, cfg.approval_timeout)
     llm = LLM(cfg.api_base_url, cfg.api_key, cfg.model, cfg.llm_timeout)
@@ -133,6 +133,15 @@ async def amain(cfg: Config, db: DB, use_cli: bool, use_web: bool, use_telegram:
             await app.stop()
             await app.shutdown()
         cleanups.insert(0, stop_telegram)
+
+    # --- relay (outbound; lets a phone app reach the agent with no open port) ---
+    if use_relay:
+        from relay_client import RelayClient
+        relay = RelayClient(cfg.relay_url, cfg.relay_agent_key, hub, commands,
+                            worker.status_dict, cfg.secrets)
+        relay.start()
+        cleanups.insert(0, relay.stop)
+        interfaces.append("relay")
 
     # --- console ---
     console_task = None
@@ -193,6 +202,7 @@ def main() -> None:
     p.add_argument("--cli", action="store_true", help="interactive console in this terminal")
     p.add_argument("--no-web", action="store_true", help="disable the web dashboard")
     p.add_argument("--no-telegram", action="store_true", help="disable Telegram even if configured")
+    p.add_argument("--no-relay", action="store_true", help="disable the outbound relay even if configured")
     args = p.parse_args()
     try:
         cfg = load_config()
@@ -218,7 +228,8 @@ def main() -> None:
     code = asyncio.run(amain(cfg, db,
                              use_cli=args.cli,
                              use_web=cfg.web_enabled and not args.no_web,
-                             use_telegram=cfg.telegram_enabled and not args.no_telegram))
+                             use_telegram=cfg.telegram_enabled and not args.no_telegram,
+                             use_relay=cfg.relay_enabled and not args.no_relay))
     sys.exit(code)
 
 

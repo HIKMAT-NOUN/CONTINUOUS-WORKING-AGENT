@@ -1,0 +1,20 @@
+# systemd unit for running the relay on a VPS. Put relay.py in /opt/myagent-relay/.
+# Set the two keys here, then: sudo systemctl enable --now myagent-relay
+[Unit]
+Description=myagent relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/myagent-relay
+ExecStart=/usr/bin/python3 /opt/myagent-relay/relay.py
+Restart=always
+RestartSec=3
+Environment=RELAY_HOST=0.0.0.0
+Environment=RELAY_PORT=8900
+Environment=RELAY_AGENT_KEY=CHANGE_ME_long_random
+Environment=RELAY_USER_TOKEN=CHANGE_ME_another_long_random
+
+[Install]
+WantedBy=multi-user.target

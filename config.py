@@ -15,7 +15,7 @@ KEYS = (
     "WORKDIR", "GOAL_INTERVAL", "MAX_STEPS_PER_TASK", "DAILY_TOKEN_BUDGET",
     "PRICE_INPUT_PER_M", "PRICE_OUTPUT_PER_M",
     "APPROVAL_TIMEOUT", "SHELL_TIMEOUT", "LLM_TIMEOUT", "DB_PATH", "LOG_DIR",
-    "DEFAULT_VERBOSE", "WEB_ENABLED", "WEB_HOST", "WEB_PORT", "WEB_TOKEN", "ACCESS", "APPROVALS", "PROGRESS_EVERY", "MAX_WORKERS", "WORKER_MAX_STEPS", "REVIEW", "REVIEW_MAX_STEPS",
+    "DEFAULT_VERBOSE", "WEB_ENABLED", "WEB_HOST", "WEB_PORT", "WEB_TOKEN", "ACCESS", "APPROVALS", "PROGRESS_EVERY", "MAX_WORKERS", "WORKER_MAX_STEPS", "REVIEW", "REVIEW_MAX_STEPS", "RELAY_URL", "RELAY_AGENT_KEY",
 )
 
 
@@ -53,14 +53,21 @@ class Config:
     worker_max_steps: int = 25  # step cap for a helper agent
     review: bool = True         # auto-review each completed task with the review agent
     review_max_steps: int = 15  # step cap for the review agent
+    relay_url: str = ""         # wss://.../ws/agent — the agent dials out here for the phone app
+    relay_agent_key: str = field(default="", repr=False)
 
     @property
     def telegram_enabled(self) -> bool:
         return bool(self.telegram_bot_token and self.allowed_user_id)
 
     @property
+    def relay_enabled(self) -> bool:
+        return bool(self.relay_url and self.relay_agent_key)
+
+    @property
     def secrets(self) -> list[str]:
-        out = [s for s in (self.api_key, self.telegram_bot_token, self.web_token) if s]
+        out = [s for s in (self.api_key, self.telegram_bot_token, self.web_token,
+                           self.relay_agent_key) if s]
         if ":" in self.telegram_bot_token:  # the secret half of "<bot id>:<secret>"
             out.append(self.telegram_bot_token.split(":", 1)[1])
         return out
@@ -132,6 +139,8 @@ def load_config(env_file: Path | None = None) -> Config:
         worker_max_steps=max(1, int(v.get("WORKER_MAX_STEPS") or 25)),
         review=(v.get("REVIEW", "on").strip().lower() not in ("0", "false", "no", "off")),
         review_max_steps=max(1, int(v.get("REVIEW_MAX_STEPS") or 15)),
+        relay_url=(v.get("RELAY_URL") or "").strip(),
+        relay_agent_key=(v.get("RELAY_AGENT_KEY") or "").strip(),
     )
 
 
