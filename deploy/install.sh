@@ -20,4 +20,8 @@ sed -e "s#__USER__#$USER_NAME#g" -e "s#__DIR__#$DIR#g" "$DIR/deploy/myagent.serv
 $SUDO systemctl daemon-reload
 $SUDO systemctl enable --now myagent
 $SUDO systemctl --no-pager status myagent | head -n 5
-echo "Logs: journalctl -u myagent -f   or   tail -f $DIR/logs/agent.log"
+echo
+echo "Logs:      journalctl -u myagent -f   (or tail -f $DIR/logs/agent.log)"
+echo "Terminal:  cd $DIR && .venv/bin/python cli.py"
+sleep 2
+echo "Dashboard: $(cd "$DIR" && .venv/bin/python cli.py url 2>/dev/null || echo 'run: .venv/bin/python cli.py url')"

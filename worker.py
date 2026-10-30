@@ -9,14 +9,14 @@ from typing import TYPE_CHECKING
 
 from agent import Agent
 from db import today
-from notifier import h, truncate
+from textfmt import h, truncate
 
 if TYPE_CHECKING:
     from approvals import Approvals
     from config import Config
     from db import DB
     from llm import LLM
-    from notifier import Notifier
+    from hub import Hub
 
 log = logging.getLogger("worker")
 
@@ -37,14 +37,15 @@ def fmt_tokens(n: int) -> str:
 
 
 class Worker:
-    def __init__(self, cfg: "Config", db: "DB", llm: "LLM", notifier: "Notifier", approvals: "Approvals"):
+    def __init__(self, cfg: "Config", db: "DB", llm: "LLM", hub: "Hub", approvals: "Approvals"):
         self.cfg = cfg
         self.db = db
-        self.notifier = notifier
+        self.hub = hub
+        self.approvals = approvals
         self.changed = asyncio.Event()       # new task / resume / goal change
         self.current: dict | None = None
         self.inner: asyncio.Task | None = None
-        self.agent = Agent(cfg, db, llm, notifier, approvals.request, self.wait_if_paused, self._on_step)
+        self.agent = Agent(cfg, db, llm, hub, approvals.request, self.wait_if_paused, self._on_step)
 
     # state ------------------------------------------------------------------------
     def poke(self) -> None:
@@ -94,15 +95,16 @@ class Worker:
                 if not self.budget_exceeded():
                     return
                 self.pause("budget")
-                self.notifier.send(
+                self.hub.emit(
                     f"💸 <b>Daily token budget reached</b> ({fmt_tokens(self.tokens_today())} / "
                     f"{fmt_tokens(self.cfg.daily_token_budget)}). Worker paused; the current task "
-                    "is saved and resumes automatically after 00:00 UTC. /resume force overrides.")
+                    "is saved and resumes automatically after 00:00 UTC. /resume force overrides.",
+                    kind="alert")
                 log.warning("daily token budget reached; pausing")
                 announced = True
             elif self.pause_reason == "budget" and not self.budget_exceeded():
                 self.resume()
-                self.notifier.send("▶️ New day — token budget reset, worker resumed.")
+                self.hub.emit("▶️ New day — token budget reset, worker resumed.", kind="alert")
                 return
             if not announced and self.current:
                 log.info("worker paused during task %s", self.current["id"])
@@ -134,10 +136,11 @@ class Worker:
     # main loop ----------------------------------------------------------------------
     async def run_forever(self) -> None:
         for t in self.db.recover_running():
-            self.notifier.send(f"♻️ Restarted — resuming task #{t['id']}: {h(truncate(t['description'], 200))}")
+            self.hub.emit(f"♻️ Restarted — resuming task #{t['id']}: {h(truncate(t['description'], 200))}",
+                          kind="task", task_id=t["id"])
         state = "paused" if self.paused else "running"
-        self.notifier.send(f"🟢 Agent online ({h(self.cfg.model)}). Worker {state}, "
-                           f"{self.db.count_pending()} task(s) queued.")
+        self.hub.emit(f"🟢 Agent online ({h(self.cfg.model)}). Worker {state}, "
+                           f"{self.db.count_pending()} task(s) queued.", kind="info")
         failures = 0
         while True:
             try:
@@ -166,7 +169,7 @@ class Worker:
             except Exception as e:  # keep the worker alive no matter what
                 failures += 1
                 log.exception("worker loop error")
-                self.notifier.send(f"⚠️ worker error: {h(truncate(str(e), 300))} (retrying)")
+                self.hub.emit(f"⚠️ worker error: {h(truncate(str(e), 300))} (retrying)", kind="alert")
                 await asyncio.sleep(min(5 * failures, 120))
 
     def _queue_goal_cycle(self, goal: str) -> None:
@@ -185,7 +188,8 @@ class Worker:
             title = f"🎯 Goal cycle (task #{tid}): {h(truncate(self.db.get('goal') or '', 200))}"
         else:
             title = f"▶️ Task #{tid}: {h(truncate(task['description'], 300))}"
-        self.agent.say(title)
+        self.hub.emit(title, kind="task", level="always", task_id=tid, state="started",
+                      description=task["description"], task_kind=task["kind"])
         log.info("task %s started", tid)
         self.inner = asyncio.create_task(self.agent.run(task), name=f"task-{tid}")
         try:
@@ -199,20 +203,22 @@ class Worker:
 
         if self.inner.cancelled():
             self.db.finish_task(tid, "aborted", "aborted by user")
-            self.notifier.send(f"🛑 Task #{tid} aborted.")
+            self.hub.emit(f"🛑 Task #{tid} aborted.", kind="final", task_id=tid, status="aborted")
             log.info("task %s aborted", tid)
         elif self.inner.exception() is not None:
             err = self.inner.exception()
             log.error("task %s crashed", tid, exc_info=err)
             self.db.finish_task(tid, "failed", f"internal error: {err!r}")
-            self.notifier.send(f"💥 Task #{tid} crashed: {h(truncate(repr(err), 400))}")
+            self.hub.emit(f"💥 Task #{tid} crashed: {h(truncate(repr(err), 400))}", kind="final",
+                          task_id=tid, status="failed")
         else:
             out = self.inner.result()
             self.db.finish_task(tid, out.status, out.summary)
             icon = "🏁" if out.status == "done" else "⚠️"
             head = (f"{icon} <b>Task #{tid} {'done' if out.status == 'done' else 'stopped'}</b> · "
                     f"{out.steps} steps · {fmt_tokens(out.tokens)} tokens\n\n")
-            self.notifier.send_plain(out.summary, prefix_html=head)
+            self.hub.emit(head + h(out.summary), kind="final", task_id=tid, status=out.status,
+                          summary=out.summary, steps=out.steps, tokens=out.tokens)
             log.info("task %s finished: %s", tid, out.status)
         self.inner = None
 
@@ -221,9 +227,34 @@ class Worker:
             res = (self.db.get_task(tid) or {}).get("result") or ""
             if "GOAL COMPLETE" in res and self.db.get("goal"):
                 self.db.set("goal", None)
-                self.notifier.send("🎉 Standing goal reported complete — goal cleared.")
+                self.hub.emit("🎉 Standing goal reported complete — goal cleared.", kind="alert")
 
     # reporting ------------------------------------------------------------------------
+    def status_dict(self) -> dict:
+        u = self.db.usage_today()
+        cur = None
+        if self.current:
+            c = self.current
+            cur = {"id": c["id"], "kind": c["kind"], "description": c["description"],
+                   "step": c["step"], "action": c["action"], "started": c["started"]}
+        return {
+            "state": "paused" if self.paused else ("working" if self.current else "idle"),
+            "pause_reason": self.pause_reason,
+            "current": cur,
+            "max_steps": self.cfg.max_steps_per_task,
+            "queue": self.db.pending(50),
+            "queue_count": self.db.count_pending(),
+            "goal": self.db.get("goal"),
+            "goal_interval_min": self.cfg.goal_interval_min,
+            "tokens_today": u["prompt_tokens"] + u["completion_tokens"],
+            "prompt_tokens": u["prompt_tokens"], "completion_tokens": u["completion_tokens"],
+            "budget": self.cfg.daily_token_budget,
+            "cost_today": u["cost"],
+            "verbose": self.hub.verbosity,
+            "model": self.cfg.model,
+            "workdir": str(self.cfg.workdir),
+        }
+
     def status_html(self) -> str:
         u = self.db.usage_today()
         used = u["prompt_tokens"] + u["completion_tokens"]
@@ -248,5 +279,5 @@ class Worker:
         lines.append(f"<b>Tokens today:</b> {fmt_tokens(used)} / {fmt_tokens(self.cfg.daily_token_budget)} "
                      f"(in {fmt_tokens(u['prompt_tokens'])}, out {fmt_tokens(u['completion_tokens'])})")
         lines.append(f"<b>Cost today:</b> ~${u['cost']:.4f}")
-        lines.append(f"<b>Verbose:</b> {self.agent.verbosity} · <b>Model:</b> {h(self.cfg.model)}")
+        lines.append(f"<b>Verbose:</b> {self.hub.verbosity} · <b>Model:</b> {h(self.cfg.model)}")
         return "\n".join(lines)

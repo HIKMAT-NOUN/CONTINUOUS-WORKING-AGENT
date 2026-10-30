@@ -10,9 +10,8 @@ from approvals import Approvals
 from config import Config
 from db import DB
 from llm import LLMResponse
-from notifier import Notifier
+from hub import Hub
 from worker import Worker
-from tests.test_notifier import FakeBot
 
 
 def call(name, **args):
@@ -47,12 +46,28 @@ def cfg(tmp_path):
                   db_path=tmp_path / "t.db", log_dir=tmp_path / "logs")
 
 
+class Collector:
+    """Hub sink that records every event, like an always-full-verbosity interface."""
+    def __init__(self):
+        self.sent = []
+
+    def deliver(self, ev):
+        self.sent.append({"text": ev.html, "kind": ev.kind, "data": ev.data})
+
+    def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+
 def build(cfg, llm, approve=True):
     db = DB(cfg.db_path)
-    bot = FakeBot()
-    n = Notifier(bot, 1, cfg.secrets, interval=0.01)
-    ap = Approvals(n, 5)
-    w = Worker(cfg, db, llm, n, ap)
+    hub = Hub(db, cfg.secrets)
+    bot = n = Collector()
+    hub.subscribe(bot)
+    ap = Approvals(hub, 5)
+    w = Worker(cfg, db, llm, hub, ap)
     async def auto(cmd, reason):
         return approve
     w.agent.tools.approve = auto

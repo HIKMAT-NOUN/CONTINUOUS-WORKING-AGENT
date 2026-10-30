@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS steps (
     duration    REAL
 );
 CREATE INDEX IF NOT EXISTS steps_task ON steps(task_id, step_no);
+CREATE TABLE IF NOT EXISTS events (            -- everything the agent narrated, for the web feed
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts    REAL NOT NULL,
+    kind  TEXT NOT NULL,
+    level TEXT NOT NULL,
+    html  TEXT NOT NULL,
+    data  TEXT
+);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS usage (
     day               TEXT PRIMARY KEY,            -- UTC date YYYY-MM-DD
@@ -141,9 +149,37 @@ class DB:
                  args if isinstance(args, str) else json.dumps(args, ensure_ascii=False),
                  status, output[:20000], duration))
 
+    def task_steps(self, task_id: int) -> list[dict]:
+        return [dict(r) for r in self._q("SELECT * FROM steps WHERE task_id=? ORDER BY id", (task_id,))]
+
     def last_steps(self, limit: int = 20) -> list[dict]:
         rows = self._q("SELECT * FROM steps ORDER BY id DESC LIMIT ?", (limit,))
         return [dict(r) for r in reversed(rows)]
+
+    # events -----------------------------------------------------------------
+    def add_event(self, ts: float, kind: str, level: str, html: str, data: dict) -> int:
+        eid = self._x("INSERT INTO events(ts,kind,level,html,data) VALUES(?,?,?,?,?)",
+                      (ts, kind, level, html, json.dumps(data, ensure_ascii=False)))
+        if eid % 500 == 0:  # keep the table bounded
+            self._x("DELETE FROM events WHERE id <= ?", (eid - 5000,))
+        return eid
+
+    def events_after(self, after_id: int = 0, limit: int = 300) -> list[dict]:
+        if after_id:
+            rows = self._q("SELECT * FROM events WHERE id>? ORDER BY id LIMIT ?", (after_id, limit))
+        else:
+            rows = list(reversed(self._q("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,))))
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["data"] = json.loads(d["data"] or "{}")
+            out.append(d)
+        return out
+
+    def recent_tasks(self, limit: int = 15) -> list[dict]:
+        return [dict(r) for r in self._q(
+            "SELECT id,kind,description,status,created_at,finished_at,steps,tokens,result "
+            "FROM tasks WHERE status!='pending' ORDER BY id DESC LIMIT ?", (limit,))]
 
     # usage ------------------------------------------------------------------
     def add_usage(self, prompt: int, completion: int, cost: float) -> None:

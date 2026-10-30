@@ -1,6 +1,6 @@
 # Installed by deploy/install.sh, which fills in User and paths.
 [Unit]
-Description=myagent - Telegram-controlled AI worker agent
+Description=myagent - always-on AI worker agent (web + CLI + Telegram)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0

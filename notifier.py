@@ -16,24 +16,12 @@ from typing import Any, Callable
 from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TimedOut
 
 from config import redact
+from textfmt import h
 
 log = logging.getLogger("notifier")
 
 MAX_LEN = 4000          # Telegram hard limit is 4096; leave room for merge separators
 SEND_INTERVAL = 1.0     # seconds between sends
-
-
-def h(text: Any) -> str:
-    return html.escape(str(text), quote=False)
-
-
-def code(text: str, limit: int = 300) -> str:
-    return f"<code>{h(truncate(text, limit))}</code>"
-
-
-def truncate(text: str, limit: int) -> str:
-    text = str(text)
-    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _strip_html(text: str) -> str:
@@ -78,6 +66,16 @@ class Notifier:
             self.queue.append(Outgoing((prefix_html if i == 0 else "") + h(chunk),
                                        markup if last else None, on_sent if last else None))
         self._wake.set()
+
+    def remove_buttons(self, message_id: int) -> None:
+        """Strip the inline keyboard from an approval message once it is answered."""
+        async def edit():
+            try:
+                await self.bot.edit_message_reply_markup(chat_id=self.chat_id, message_id=message_id,
+                                                         reply_markup=None)
+            except Exception as e:  # purely cosmetic
+                log.debug("could not remove buttons: %s", e)
+        asyncio.get_running_loop().create_task(edit())
 
     # consumer side ------------------------------------------------------------
     def start(self) -> None:

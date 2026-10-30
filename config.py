@@ -15,7 +15,7 @@ KEYS = (
     "WORKDIR", "GOAL_INTERVAL", "MAX_STEPS_PER_TASK", "DAILY_TOKEN_BUDGET",
     "PRICE_INPUT_PER_M", "PRICE_OUTPUT_PER_M",
     "APPROVAL_TIMEOUT", "SHELL_TIMEOUT", "LLM_TIMEOUT", "DB_PATH", "LOG_DIR",
-    "DEFAULT_VERBOSE",
+    "DEFAULT_VERBOSE", "WEB_ENABLED", "WEB_HOST", "WEB_PORT", "WEB_TOKEN",
 )
 
 
@@ -28,9 +28,9 @@ class Config:
     api_base_url: str
     api_key: str = field(repr=False)
     model: str
-    telegram_bot_token: str = field(repr=False)
-    allowed_user_id: int
     workdir: Path
+    telegram_bot_token: str = field(default="", repr=False)
+    allowed_user_id: int = 0
     goal_interval_min: float = 30
     max_steps_per_task: int = 40
     daily_token_budget: int = 2_000_000
@@ -42,10 +42,18 @@ class Config:
     db_path: Path = PROJECT_DIR / "data" / "agent.db"
     log_dir: Path = PROJECT_DIR / "logs"
     default_verbose: str = "steps"
+    web_enabled: bool = True
+    web_host: str = "127.0.0.1"
+    web_port: int = 8765
+    web_token: str = field(default="", repr=False)   # empty -> generated and stored in the DB
+
+    @property
+    def telegram_enabled(self) -> bool:
+        return bool(self.telegram_bot_token and self.allowed_user_id)
 
     @property
     def secrets(self) -> list[str]:
-        out = [s for s in (self.api_key, self.telegram_bot_token) if s]
+        out = [s for s in (self.api_key, self.telegram_bot_token, self.web_token) if s]
         if ":" in self.telegram_bot_token:  # the secret half of "<bot id>:<secret>"
             out.append(self.telegram_bot_token.split(":", 1)[1])
         return out
@@ -62,14 +70,17 @@ def _raw(env_file: Path | None) -> dict[str, str]:
 
 def load_config(env_file: Path | None = None) -> Config:
     v = _raw(env_file)
-    missing = [k for k in ("API_BASE_URL", "API_KEY", "MODEL", "TELEGRAM_BOT_TOKEN",
-                           "ALLOWED_USER_ID", "WORKDIR") if not v.get(k)]
+    missing = [k for k in ("API_BASE_URL", "API_KEY", "MODEL", "WORKDIR") if not v.get(k)]
     if missing:
         raise ConfigError(f"missing required settings in .env: {', '.join(missing)}")
-    try:
-        allowed = int(v["ALLOWED_USER_ID"])
-    except ValueError as e:
-        raise ConfigError("ALLOWED_USER_ID must be a numeric Telegram user id") from e
+    token = (v.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    allowed = 0
+    if token:  # Telegram is optional; if a token is set, the user id is required
+        try:
+            allowed = int(v.get("ALLOWED_USER_ID") or "")
+        except ValueError as e:
+            raise ConfigError("ALLOWED_USER_ID must be your numeric Telegram user id "
+                              "(or leave TELEGRAM_BOT_TOKEN empty to disable Telegram)") from e
 
     workdir = Path(os.path.expanduser(v["WORKDIR"])).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
@@ -89,7 +100,7 @@ def load_config(env_file: Path | None = None) -> Config:
         api_base_url=v["API_BASE_URL"].rstrip("/"),
         api_key=v["API_KEY"],
         model=v["MODEL"],
-        telegram_bot_token=v["TELEGRAM_BOT_TOKEN"],
+        telegram_bot_token=token,
         allowed_user_id=allowed,
         workdir=workdir,
         goal_interval_min=float(v.get("GOAL_INTERVAL") or 30),
@@ -103,6 +114,10 @@ def load_config(env_file: Path | None = None) -> Config:
         db_path=p("DB_PATH", PROJECT_DIR / "data" / "agent.db"),
         log_dir=p("LOG_DIR", PROJECT_DIR / "logs"),
         default_verbose=verbose,
+        web_enabled=(v.get("WEB_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")),
+        web_host=v.get("WEB_HOST") or "127.0.0.1",
+        web_port=int(v.get("WEB_PORT") or 8765),
+        web_token=(v.get("WEB_TOKEN") or "").strip(),
     )
 
 

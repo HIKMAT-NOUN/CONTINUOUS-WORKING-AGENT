@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Console</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f0f2f5; --border: #dfe3ea;
+  --text: #1b1f27; --muted: #667085; --accent: #2563eb; --accent-text: #fff;
+  --ok: #15803d; --err: #b91c1c; --warn: #b45309; --code-bg: #eef1f6;
+  --shadow: 0 1px 2px rgba(16,24,40,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1015; --panel: #161920; --panel-2: #1c2029; --border: #2a2f3b;
+    --text: #e6e8ee; --muted: #8b93a5; --accent: #3b82f6; --accent-text: #fff;
+    --ok: #4ade80; --err: #f87171; --warn: #fbbf24; --code-bg: #0f1218;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1015; --panel: #161920; --panel-2: #1c2029; --border: #2a2f3b;
+  --text: #e6e8ee; --muted: #8b93a5; --accent: #3b82f6; --accent-text: #fff;
+  --ok: #4ade80; --err: #f87171; --warn: #fbbf24; --code-bg: #0f1218;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+code, pre, textarea.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; word-break: break-all; }
+pre { background: var(--code-bg); padding: 8px 10px; border-radius: 6px; white-space: pre-wrap;
+  word-break: break-word; margin: 6px 0 0; max-height: 360px; overflow: auto; }
+button { font: inherit; cursor: pointer; border-radius: 7px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--text); padding: 6px 12px; }
+button:hover { background: var(--panel-2); }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.danger { color: var(--err); }
+button.ok { color: var(--ok); }
+button:disabled { opacity: .5; cursor: default; }
+input, textarea, select { font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; width: 100%; }
+
+.app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+header { display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+  border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  background: var(--panel-2); font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.dot.working { background: var(--ok); animation: pulse 1.4s infinite; }
+.dot.paused { background: var(--warn); }
+.dot.off { background: var(--err); }
+@keyframes pulse { 50% { opacity: .35; } }
+.spacer { flex: 1; }
+.budget { width: 120px; height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+.budget > div { height: 100%; background: var(--accent); width: 0; }
+
+main { display: grid; grid-template-columns: 1fr 340px; min-height: 0; }
+.center { display: grid; grid-template-rows: auto auto 1fr auto; min-height: 0; border-right: 1px solid var(--border); }
+aside { overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+
+.now { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.now .row { display: flex; align-items: center; gap: 10px; }
+.now .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.now .action { color: var(--muted); margin-top: 4px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progress { height: 4px; background: var(--panel-2); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+.progress > div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+
+.approvals:empty { display: none; }
+.approval { margin: 10px 16px 0; padding: 12px; border: 1px solid var(--warn); border-radius: 10px; background: var(--panel); }
+.approval .cmd { margin: 6px 0; }
+.approval .actions { display: flex; gap: 8px; margin-top: 8px; }
+
+.feed { overflow: auto; padding: 10px 16px 16px; min-height: 0; }
+.ev { display: grid; grid-template-columns: 58px 1fr; gap: 10px; padding: 4px 0; }
+.ev .ts { color: var(--muted); font-size: 12px; padding-top: 1px; font-variant-numeric: tabular-nums; }
+.ev .body { white-space: pre-wrap; word-break: break-word; }
+.ev.task .body, .ev.final .body { font-weight: 500; }
+.ev.task { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.ev.final .body { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-weight: 400; box-shadow: var(--shadow); }
+.ev.alert .body { color: var(--warn); }
+.ev.thinking .body { color: var(--muted); font-style: italic; }
+.ev.reply .body { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; }
+.ev.mine .body { color: var(--accent); }
+details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+.hide-output .ev.output { display: none; }
+
+.composer { border-top: 1px solid var(--border); padding: 10px 16px; background: var(--panel); }
+.composer form { display: flex; gap: 8px; align-items: flex-end; }
+.composer textarea { resize: none; min-height: 40px; max-height: 180px; }
+.hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; box-shadow: var(--shadow); }
+.card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+.btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 5px 11px; }
+.seg button.on { background: var(--accent); color: var(--accent-text); }
+.list { display: flex; flex-direction: column; gap: 6px; }
+.item { padding: 7px 9px; border-radius: 7px; background: var(--panel-2); font-size: 13px; cursor: default; }
+.item.click { cursor: pointer; }
+.item .meta { color: var(--muted); font-size: 12px; }
+.item .desc { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.st-done { color: var(--ok); } .st-failed, .st-aborted { color: var(--err); }
+.muted { color: var(--muted); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; }
+.kv div:nth-child(odd) { color: var(--muted); }
+
+dialog { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text);
+  width: min(820px, 94vw); max-height: 86vh; padding: 0; }
+dialog::backdrop { background: rgba(0,0,0,.45); }
+dialog .dh { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); gap: 10px; }
+dialog .db { padding: 12px 16px; overflow: auto; max-height: calc(86vh - 56px); }
+.step { border-bottom: 1px solid var(--border); padding: 8px 0; }
+
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+  .center { border-right: 0; min-height: 70vh; }
+  aside { border-top: 1px solid var(--border); }
+  .budget { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>🤖 Agent</h1>
+    <span class="pill"><span class="dot" id="stateDot"></span><span id="stateText">connecting…</span></span>
+    <span class="pill" id="modelPill">—</span>
+    <span class="spacer"></span>
+    <span class="pill" title="Tokens used today / daily budget"><span id="tokText">—</span><span class="budget"><div id="tokBar"></div></span></span>
+    <span class="pill" id="costPill" title="Estimated cost today">$—</span>
+    <span class="pill" title="Live connection"><span class="dot" id="connDot"></span><span id="connText">offline</span></span>
+    <button id="themeBtn" title="Toggle light/dark theme">Theme</button>
+  </header>
+  <main>
+    <section class="center">
+      <div class="now">
+        <div class="row">
+          <div class="title" id="nowTitle">Idle</div>
+          <button class="danger" id="stopBtn" disabled>■ Stop</button>
+        </div>
+        <div class="action" id="nowAction">Waiting for work.</div>
+        <div class="progress"><div id="nowBar"></div></div>
+      </div>
+      <div class="approvals" id="approvals"></div>
+      <div class="feed" id="feed"></div>
+      <div class="composer">
+        <form id="form">
+          <textarea id="input" rows="1" placeholder="Describe a task… or type a /command" autocomplete="off"></textarea>
+          <button class="primary" type="submit">Send</button>
+        </form>
+        <div class="hint">Enter sends · Shift+Enter for a new line · plain text becomes a task · /help lists commands</div>
+      </div>
+    </section>
+    <aside>
+      <div class="card">
+        <h2>Controls</h2>
+        <div class="btns">
+          <button id="pauseBtn">⏸ Pause</button>
+          <button id="resumeBtn">▶ Resume</button>
+          <button id="logBtn">Step log</button>
+        </div>
+        <div style="margin-top:12px" class="muted">Telegram / CLI verbosity</div>
+        <div class="seg" id="verbSeg" style="margin-top:6px">
+          <button data-v="off">off</button><button data-v="steps">steps</button><button data-v="full">full</button>
+        </div>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:12px" class="muted">
+          <input type="checkbox" id="showOutput" style="width:auto" checked> show tool output in this feed
+        </label>
+      </div>
+      <div class="card">
+        <h2>Standing goal</h2>
+        <div id="goalText" class="muted" style="margin-bottom:8px">None</div>
+        <textarea id="goalInput" rows="2" placeholder="Long-running objective…"></textarea>
+        <div class="btns" style="margin-top:8px">
+          <button id="goalSet">Set goal</button>
+          <button id="goalClear" class="danger">Clear</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Queue <span id="queueCount" class="muted"></span></h2>
+        <div class="list" id="queue"><div class="muted">Empty</div></div>
+      </div>
+      <div class="card">
+        <h2>Recent tasks</h2>
+        <div class="list" id="recent"><div class="muted">None yet</div></div>
+      </div>
+      <div class="card">
+        <h2>Agent</h2>
+        <div class="kv" id="info"></div>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<dialog id="dlg">
+  <div class="dh"><b id="dlgTitle" style="flex:1"></b><button onclick="dlg.close()">Close</button></div>
+  <div class="db" id="dlgBody"></div>
+</dialog>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const feed = $("feed");
+let lastId = 0, ws = null, retry = 1000, state = null;
+const approvalsShown = new Map();
+
+// --- theme -------------------------------------------------------------------
+try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+$("themeBtn").onclick = () => {
+  const cur = document.documentElement.dataset.theme ||
+    (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("theme", next); } catch (e) {}
+};
+
+// --- safe rendering of the server's small HTML subset (b, i, code, pre) --------------------
+const ALLOWED = new Set(["B", "I", "CODE", "PRE", "STRONG", "EM"]);
+function safeHTML(html) {
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
+  const out = document.createElement("div");
+  (function walk(src, dst) {
+    for (const n of src.childNodes) {
+      if (n.nodeType === 3) dst.appendChild(document.createTextNode(n.textContent));
+      else if (n.nodeType === 1) {
+        if (ALLOWED.has(n.tagName)) { const e = document.createElement(n.tagName); dst.appendChild(e); walk(n, e); }
+        else walk(n, dst);
+      }
+    }
+  })(doc.body.firstChild, out);
+  return out;
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
+
+// --- feed --------------------------------------------------------------------------------
+function nearBottom() { return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80; }
+function addRow(kind, ts, node, extraClass) {
+  const stick = nearBottom();
+  const row = document.createElement("div");
+  row.className = `ev ${kind} ${extraClass || ""}`;
+  const t = document.createElement("div"); t.className = "ts"; t.textContent = fmtTime(ts);
+  const b = document.createElement("div"); b.className = "body"; b.appendChild(node);
+  row.append(t, b);
+  feed.appendChild(row);
+  while (feed.children.length > 1500) feed.removeChild(feed.firstChild);
+  if (stick) feed.scrollTop = feed.scrollHeight;
+}
+function addEvent(ev) {
+  if (ev.id <= lastId) return;
+  lastId = ev.id;
+  if (ev.kind === "approval") { showApproval(ev.data); }
+  if (ev.kind === "approval_done") { hideApproval(ev.data.aid); }
+  if (ev.kind === "output") {
+    const d = document.createElement("details");
+    const s = document.createElement("summary"); s.textContent = `output of step ${ev.data.step ?? ""}`;
+    const p = document.createElement("pre"); p.textContent = ev.data.output || "";
+    d.append(s, p);
+    addRow("output", ev.ts, d);
+    return;
+  }
+  addRow(ev.kind, ev.ts, safeHTML(ev.html));
+  if (["task", "final", "result", "step"].includes(ev.kind)) scheduleState();
+}
+function addLocal(kind, html, cls) { addRow(kind, Date.now() / 1000, safeHTML(html), cls); }
+
+$("showOutput").onchange = (e) => feed.classList.toggle("hide-output", !e.target.checked);
+
+// --- approvals ---------------------------------------------------------------------------
+function showApproval(a) {
+  if (approvalsShown.has(a.aid)) return;
+  const box = document.createElement("div");
+  box.className = "approval";
+  box.innerHTML = `<b>⚠️ Approval needed</b> <span class="muted">[${esc(a.aid)}]</span>
+    <div class="cmd"><pre>${esc(a.command)}</pre></div>
+    <div class="muted">${esc(a.reason)}</div>
+    <div class="actions"><button class="ok">✅ Approve</button><button class="danger">❌ Deny</button></div>`;
+  const [ok, no] = box.querySelectorAll("button");
+  ok.onclick = () => { ok.disabled = no.disabled = true; send(`/approve ${a.aid}`); };
+  no.onclick = () => { ok.disabled = no.disabled = true; send(`/deny ${a.aid}`); };
+  $("approvals").appendChild(box);
+  approvalsShown.set(a.aid, box);
+}
+function hideApproval(aid) { const b = approvalsShown.get(aid); if (b) { b.remove(); approvalsShown.delete(aid); } }
+
+// --- connection --------------------------------------------------------------------------
+function setConn(on) {
+  $("connDot").className = "dot " + (on ? "working" : "off");
+  $("connText").textContent = on ? "live" : "reconnecting";
+}
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws?after=${lastId}`);
+  ws.onopen = () => { setConn(true); retry = 1000; loadState(); };
+  ws.onclose = () => { setConn(false); setTimeout(connect, retry); retry = Math.min(retry * 2, 15000); };
+  ws.onmessage = (m) => {
+    const msg = JSON.parse(m.data);
+    if (msg.type === "history") msg.events.forEach(addEvent);
+    else if (msg.type === "event") addEvent(msg.event);
+    else if (msg.type === "reply" && msg.html) { addLocal("reply", msg.html); scheduleState(); }
+  };
+}
+async function send(text) {
+  text = text.trim();
+  if (!text) return;
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "command", text }));
+  else {
+    const r = await fetch("/api/command", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    if (r.status === 401) return location.reload();
+    const j = await r.json(); if (j.reply) addLocal("reply", j.reply);
+  }
+  setTimeout(loadState, 300);
+}
+
+// --- composer ----------------------------------------------------------------------------
+const input = $("input");
+input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 180) + "px"; });
+input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("form").requestSubmit(); } });
+$("form").onsubmit = (e) => {
+  e.preventDefault();
+  const t = input.value; if (!t.trim()) return;
+  addLocal("reply", esc("› " + t), "mine");
+  send(t); input.value = ""; input.style.height = "auto";
+};
+
+// --- controls ----------------------------------------------------------------------------
+$("pauseBtn").onclick = () => send("/pause");
+$("resumeBtn").onclick = () => send("/resume");
+$("stopBtn").onclick = () => { if (confirm("Abort the current task?")) send("/stop"); };
+$("logBtn").onclick = () => send("/log");
+$("goalSet").onclick = () => { const g = $("goalInput").value.trim(); if (g) { send("/goal " + g); $("goalInput").value = ""; } };
+$("goalClear").onclick = () => send("/goal clear");
+document.querySelectorAll("#verbSeg button").forEach((b) => b.onclick = () => send("/verbose " + b.dataset.v));
+
+// --- state panel -------------------------------------------------------------------------
+let stateTimer = null;
+function scheduleState() { clearTimeout(stateTimer); stateTimer = setTimeout(loadState, 250); }
+async function loadState() {
+  let r;
+  try { r = await fetch("/api/state"); } catch (e) { return; }
+  if (r.status === 401) return location.reload();
+  const j = await r.json(); state = j; const s = j.status;
+
+  const label = s.state === "paused" ? (s.pause_reason === "budget" ? "paused · budget" : "paused") : s.state;
+  $("stateDot").className = "dot " + s.state; $("stateText").textContent = label;
+  $("modelPill").textContent = s.model;
+  $("tokText").textContent = `${fmtTok(s.tokens_today)} / ${fmtTok(s.budget)}`;
+  $("tokBar").style.width = Math.min(100, 100 * s.tokens_today / Math.max(1, s.budget)) + "%";
+  $("costPill").textContent = "$" + s.cost_today.toFixed(4);
+
+  if (s.current) {
+    const c = s.current;
+    $("nowTitle").textContent = `${c.kind === "goal" ? "🎯 Goal cycle" : "Task"} #${c.id} — ${c.description.split("\n")[0]}`;
+    $("nowAction").replaceChildren(c.action ? safeHTML(c.action) : document.createTextNode("Thinking…"));
+    $("nowBar").style.width = (100 * c.step / s.max_steps) + "%";
+    $("stopBtn").disabled = false;
+  } else {
+    $("nowTitle").textContent = s.state === "paused" ? "Paused" : "Idle";
+    $("nowAction").textContent = s.queue_count ? `${s.queue_count} task(s) queued` : (s.goal ? "Waiting for the next goal cycle." : "Waiting for work.");
+    $("nowBar").style.width = "0"; $("stopBtn").disabled = true;
+  }
+  $("pauseBtn").disabled = s.state === "paused";
+  $("resumeBtn").disabled = s.state !== "paused";
+  document.querySelectorAll("#verbSeg button").forEach((b) => b.classList.toggle("on", b.dataset.v === s.verbose));
+  $("goalText").textContent = s.goal || "None";
+
+  $("queueCount").textContent = s.queue_count ? `(${s.queue_count})` : "";
+  $("queue").innerHTML = s.queue.length ? "" : `<div class="muted">Empty</div>`;
+  for (const t of s.queue) {
+    const d = document.createElement("div"); d.className = "item";
+    d.innerHTML = `<div class="meta">#${t.id}${t.kind === "goal" ? " · 🎯 goal" : ""}</div><div class="desc">${esc(t.description.split("\n")[0])}</div>`;
+    $("queue").appendChild(d);
+  }
+  $("recent").innerHTML = j.recent.length ? "" : `<div class="muted">None yet</div>`;
+  for (const t of j.recent) {
+    const d = document.createElement("div"); d.className = "item click";
+    d.innerHTML = `<div class="meta"><span class="st-${t.status}">${t.status}</span> · #${t.id} · ${t.steps} steps · ${fmtTok(t.tokens)} tok</div><div class="desc">${esc(t.kind === "goal" ? "🎯 goal cycle" : t.description)}</div>`;
+    d.onclick = () => openTask(t.id);
+    $("recent").appendChild(d);
+  }
+  for (const a of j.pending_approvals) showApproval(a);
+  for (const aid of [...approvalsShown.keys()]) if (!j.pending_approvals.some((a) => a.aid === aid)) hideApproval(aid);
+
+  $("info").innerHTML = `<div>Workdir</div><div><code>${esc(s.workdir)}</code></div>
+    <div>Max steps</div><div>${s.max_steps}</div><div>Goal every</div><div>${s.goal_interval_min} min</div>
+    <div>Tokens in/out</div><div>${fmtTok(s.prompt_tokens)} / ${fmtTok(s.completion_tokens)}</div>`;
+}
+
+async function openTask(id) {
+  const r = await fetch(`/api/tasks/${id}`); if (!r.ok) return;
+  const { task, steps } = await r.json();
+  $("dlgTitle").textContent = `Task #${task.id} · ${task.status}`;
+  const body = $("dlgBody"); body.innerHTML = "";
+  const desc = document.createElement("pre"); desc.textContent = task.description; body.appendChild(desc);
+  const h = document.createElement("h3"); h.textContent = "Result"; body.appendChild(h);
+  const res = document.createElement("pre"); res.textContent = task.result || "—"; body.appendChild(res);
+  const h2 = document.createElement("h3"); h2.textContent = `Steps (${steps.length})`; body.appendChild(h2);
+  for (const s of steps) {
+    const d = document.createElement("div"); d.className = "step";
+    const icon = { ok: "✅", error: "❌", denied: "🚫" }[s.status] || "•";
+    d.innerHTML = `<div>${icon} <b>${s.step_no}. ${esc(s.tool)}</b> <span class="muted">${(s.duration || 0).toFixed(1)}s</span></div><code>${esc(s.args)}</code>`;
+    const det = document.createElement("details"); const sm = document.createElement("summary"); sm.textContent = "output";
+    const p = document.createElement("pre"); p.textContent = s.output || ""; det.append(sm, p); d.appendChild(det);
+    body.appendChild(d);
+  }
+  $("dlg").showModal();
+}
+
+connect();
+setInterval(loadState, 3000);
+</script>
+</body>
+</html>

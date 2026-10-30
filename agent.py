@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from llm import LLM, LLMError
-from notifier import Notifier, code, h, truncate
+from hub import Hub
+from textfmt import code, h, truncate
 from tools import TOOL_SPECS, Tools, first_line
 
 if TYPE_CHECKING:
@@ -33,9 +34,6 @@ and why. It is shown to the human as your plan.
 - When the task is complete (or cannot be completed), reply WITHOUT any tool call. That reply \
 is your final report to the human: state the result first, concisely, then key details.
 """
-
-VERBOSITY = ("off", "steps", "full")
-
 
 @dataclass
 class Outcome:
@@ -62,33 +60,25 @@ def describe_call(name: str, args: dict) -> str:
 
 
 class Agent:
-    def __init__(self, cfg: "Config", db: "DB", llm: LLM, notifier: Notifier,
+    def __init__(self, cfg: "Config", db: "DB", llm: LLM, hub: Hub,
                  approve: Callable[[str, str], Awaitable[bool]],
                  wait_if_paused: Callable[[], Awaitable[None]],
                  on_step: Callable[[int, str], None] | None = None):
         self.cfg = cfg
         self.db = db
         self.llm = llm
-        self.notifier = notifier
+        self.hub = hub
         self.wait_if_paused = wait_if_paused
         self.on_step = on_step or (lambda n, s: None)
         self.tools = Tools(cfg.workdir, cfg.secrets, approve, self._model_update, cfg.shell_timeout)
 
     # narration helpers ----------------------------------------------------------
-    @property
-    def verbosity(self) -> str:
-        v = self.db.get("verbose", self.cfg.default_verbose)
-        return v if v in VERBOSITY else "steps"
-
-    def say(self, text_html: str, level: str = "steps") -> None:
-        """level: 'always' (finals, alerts), 'steps', or 'full'."""
-        v = self.verbosity
-        if level == "always" or (level == "steps" and v in ("steps", "full")) or (level == "full" and v == "full"):
-            self.notifier.send(text_html)
+    def say(self, text_html: str, level: str = "steps", kind: str = "info", **data) -> None:
+        """level: 'always' (finals, alerts), 'steps' (narration) or 'full' (tool output)."""
+        self.hub.emit(text_html, kind=kind, level=level, **data)
 
     def _model_update(self, text: str) -> None:
-        if self.verbosity != "off":
-            self.notifier.send_plain(text, prefix_html="💬 ")
+        self.say(f"💬 {h(text)}", kind="update", text=text)
 
     def account(self, prompt: int, completion: int, provider_cost: float | None) -> int:
         cost = provider_cost if provider_cost is not None else (
@@ -126,7 +116,8 @@ class Agent:
                 return Outcome("done", resp.content.strip() or "(no final message)", steps, tokens)
 
             if resp.content.strip():
-                self.say(f"🧠 thinking: {h(truncate(first_line(resp.content, 300), 300))}")
+                self.say(f"🧠 thinking: {h(truncate(first_line(resp.content, 300), 300))}",
+                         kind="thinking", task_id=task_id, text=resp.content)
 
             for tc in resp.tool_calls:
                 name = tc["function"]["name"]
@@ -141,7 +132,8 @@ class Agent:
                         raise ValueError("arguments must be a JSON object")
                 except ValueError as e:
                     result_text = f"error: invalid JSON arguments: {e}"
-                    self.say(f"❌ {h(name)}: invalid arguments from model")
+                    self.say(f"❌ {h(name)}: invalid arguments from model", kind="result",
+                             task_id=task_id, step=steps, ok=False)
                     self.db.log_step(task_id, steps, name, tc["function"]["arguments"], "error", result_text, 0)
                     messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result_text})
                     continue
@@ -149,7 +141,7 @@ class Agent:
                 narration = describe_call(name, args)
                 self.on_step(steps, narration)
                 if name != "send_update":
-                    self.say(narration)
+                    self.say(narration, kind="step", task_id=task_id, step=steps, tool=name, args=args)
                 t0 = time.monotonic()
                 res = await self.tools.call(name, args)
                 dt = time.monotonic() - t0
@@ -159,9 +151,12 @@ class Agent:
                          truncate(json.dumps(args, ensure_ascii=False), 300), status, res.summary)
                 if name != "send_update":
                     icon = "✅ ok" if res.ok else ("🚫 denied" if res.denied else "❌ error")
-                    self.say(f"{icon}" + (f" — {h(truncate(res.summary, 300))}" if res.summary else ""))
-                    if self.verbosity == "full" and res.output:
-                        self.say(f"<pre>{h(truncate(res.output, 500))}</pre>", level="full")
+                    self.say(f"{icon}" + (f" — {h(truncate(res.summary, 300))}" if res.summary else ""),
+                             kind="result", task_id=task_id, step=steps, ok=res.ok, denied=res.denied,
+                             duration=round(dt, 2))
+                    if res.output:
+                        self.say(f"<pre>{h(truncate(res.output, 500))}</pre>", level="full", kind="output",
+                                 task_id=task_id, step=steps, output=truncate(res.output, 6000))
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": res.output})
 
             self.db.save_progress(task_id, messages, steps, tokens)
