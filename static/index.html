@@ -83,6 +83,10 @@ aside { overflow: auto; padding: 14px; display: flex; flex-direction: column; ga
 .ev.final .body { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-weight: 400; box-shadow: var(--shadow); }
 .ev.alert .body { color: var(--warn); }
 .ev.thinking .body { color: var(--muted); font-style: italic; }
+.ev.progress .body { background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  border-left: 3px solid var(--accent); border-radius: 6px; padding: 7px 11px; font-weight: 500; }
+.friendly .ev.step .body, .friendly .ev.result .body { color: var(--muted); font-size: 13px; }
+.friendly .ev.output { display: none; }
 .ev.reply .body { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; }
 .ev.mine .body { color: var(--accent); }
 details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
@@ -170,6 +174,9 @@ dialog .db { padding: 12px 16px; overflow: auto; max-height: calc(86vh - 56px); 
         </div>
         <label style="display:flex;gap:8px;align-items:center;margin-top:12px" class="muted">
           <input type="checkbox" id="showOutput" style="width:auto" checked> show tool output in this feed
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:8px" class="muted">
+          <input type="checkbox" id="friendly" style="width:auto"> friendly view (highlight the plain-language recaps)
         </label>
       </div>
       <div class="card">
@@ -271,6 +278,13 @@ function addEvent(ev) {
 function addLocal(kind, html, cls) { addRow(kind, Date.now() / 1000, safeHTML(html), cls); }
 
 $("showOutput").onchange = (e) => feed.classList.toggle("hide-output", !e.target.checked);
+const friendly = $("friendly");
+try { friendly.checked = localStorage.getItem("friendly") === "1"; } catch (e) {}
+function applyFriendly() {
+  document.body.classList.toggle("friendly", friendly.checked);
+  try { localStorage.setItem("friendly", friendly.checked ? "1" : "0"); } catch (e) {}
+}
+friendly.onchange = applyFriendly; applyFriendly();
 
 // --- approvals ---------------------------------------------------------------------------
 function showApproval(a) {

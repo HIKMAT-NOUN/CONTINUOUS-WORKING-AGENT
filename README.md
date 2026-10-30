@@ -151,6 +151,18 @@ Plain text without a leading `/` is added as a task.
 | `/verbose off\|steps\|full` | narration level for Telegram and the CLI |
 | `/log` | last 20 steps |
 
+## Reading the feed
+- **Plain-language recaps.** Every `PROGRESS_EVERY` steps (default 5) the agent writes one
+  friendly sentence (🧭) summarising what it's been doing, in between the raw command
+  lines. Set `PROGRESS_EVERY=0` in `.env` to turn it off. Each recap is a small extra LLM
+  call, so it uses a few tokens.
+- **Friendly view.** The checkbox in the dashboard's Controls dims the mechanical step
+  lines and hides tool output, so the 🧭 recaps and 🧠 plans stand out. Nothing is lost —
+  untick it to see every command again.
+- **Why a task can run long.** The agent keeps calling tools until it finishes, fails, or
+  hits `MAX_STEPS_PER_TASK` (40). A vague task ("check your access") makes it explore for
+  many steps; a specific task finishes fast. Lower `MAX_STEPS_PER_TASK` to cap it.
+
 ## How it behaves
 - **Task queue.** A background worker takes the next pending task and runs an agent loop
   (LLM → tool calls → results → LLM …) until the task is done, fails, or reaches

@@ -116,6 +116,8 @@ class Agent:
         task_id = task["id"]
         messages = self.db.load_messages(task)
         steps, tokens = task.get("steps") or 0, task.get("tokens") or 0
+        actions: list[str] = []       # short lines fed to the periodic plain-language recap
+        last_recap = steps
         if messages:
             messages.append({"role": "user", "content": "(The agent process was restarted. "
                              "Continue the task from where you left off; verify the state of "
@@ -184,14 +186,43 @@ class Agent:
                     if res.output:
                         self.say(f"<pre>{h(truncate(res.output, 500))}</pre>", level="full", kind="output",
                                  task_id=task_id, step=steps, output=truncate(res.output, 6000))
+                actions.append(f"{name}({truncate(json.dumps(args, ensure_ascii=False), 120)}) "
+                               f"-> {status}: {truncate(res.summary, 120)}")
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": res.output})
 
             self.db.save_progress(task_id, messages, steps, tokens)
+
+            if self.cfg.progress_every and steps - last_recap >= self.cfg.progress_every \
+                    and steps < self.cfg.max_steps_per_task:
+                tokens += await self._recap(task, actions)
+                last_recap = steps
 
             if steps >= self.cfg.max_steps_per_task:
                 summary, extra = await self._final_summary(messages)
                 return Outcome("failed", f"Step limit ({self.cfg.max_steps_per_task}) reached.\n\n{summary}",
                                steps, tokens + extra)
+
+    async def _recap(self, task: dict, actions: list[str]) -> int:
+        """One friendly sentence about the recent steps, for a non-technical watcher.
+        A small, separate LLM call (does not carry the full tool output)."""
+        recent = actions[-(self.cfg.progress_every * 2):]
+        ask = [
+            {"role": "system", "content": "You narrate an AI agent's work for a non-technical person "
+             "watching live. Given the task and the agent's recent actions, reply with ONE short, "
+             "plain-English sentence (max 25 words) about what it has been doing and where it is now. "
+             "No tool names, no markdown, no preamble."},
+            {"role": "user", "content": "Task: " + truncate(task["description"], 300) + "\n\nRecent actions:\n- "
+             + "\n- ".join(recent)},
+        ]
+        try:
+            resp = await self.llm.chat(ask, None)
+        except LLMError:
+            return 0
+        line = visible_text(resp.content)
+        if line:
+            self.say(f"🧭 {h(truncate(line, 300))}", kind="progress", level="steps",
+                     task_id=task["id"], text=line)
+        return self.account(resp.prompt_tokens, resp.completion_tokens, resp.cost)
 
     async def _final_summary(self, messages: list[dict]) -> tuple[str, int]:
         ask = messages + [{"role": "user", "content": "You have reached the step limit and cannot "

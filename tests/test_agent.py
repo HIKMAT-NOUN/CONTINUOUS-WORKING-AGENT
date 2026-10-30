@@ -192,3 +192,25 @@ def test_think_blocks_hidden():
     assert visible_text("<think>secret plan\nmore</think>\nListing files now.") == "Listing files now."
     assert visible_text("<think>unterminated") == ""
     assert visible_text("plain") == "plain"
+
+
+async def test_periodic_recap(cfg):
+    from dataclasses import replace
+    cfg = replace(cfg, progress_every=2, max_steps_per_task=10)
+    # 5 tool steps then a final message; recap fires after step 2 and step 4.
+    llm = ScriptedLLM([("", [call("list_dir")])] * 5 + [("all checked", None)])
+    # intersperse recap replies: the scripted LLM pops in order, so recaps must be scripted too.
+    db, bot, n, w = build(cfg, llm)
+    # Replace with an interleaved script: tool, tool, RECAP, tool, tool, RECAP, tool, final
+    llm.script = [
+        ("", [call("list_dir")]), ("", [call("list_dir")]), ("Looked around twice.", None),
+        ("", [call("list_dir")]), ("", [call("list_dir")]), ("Halfway through.", None),
+        ("", [call("list_dir")]), ("done now", None),
+    ]
+    db.add_task("explore")
+    n.start()
+    wt = asyncio.create_task(w.run_forever())
+    await run_until(lambda: db.get_task(1)["status"] == "done")
+    wt.cancel()
+    recaps = [e for e in bot.sent if e["kind"] == "progress"]
+    assert [r["data"]["text"] for r in recaps] == ["Looked around twice.", "Halfway through."]
