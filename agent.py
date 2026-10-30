@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Awaitable, Callable
@@ -34,6 +35,15 @@ and why. It is shown to the human as your plan.
 - When the task is complete (or cannot be completed), reply WITHOUT any tool call. That reply \
 is your final report to the human: state the result first, concisely, then key details.
 """
+
+_THINK = re.compile(r"<think>.*?(?:</think>|$)", re.S | re.I)
+
+
+def visible_text(content: str) -> str:
+    """Hide reasoning blocks (<think>…</think>, e.g. MiniMax/DeepSeek) from what the human sees.
+    The full content stays in the conversation history sent back to the model."""
+    return _THINK.sub("", content or "").strip()
+
 
 @dataclass
 class Outcome:
@@ -113,11 +123,12 @@ class Agent:
 
             if not resp.tool_calls:
                 self.db.save_progress(task_id, messages, steps, tokens)
-                return Outcome("done", resp.content.strip() or "(no final message)", steps, tokens)
+                return Outcome("done", visible_text(resp.content) or "(no final message)", steps, tokens)
 
-            if resp.content.strip():
-                self.say(f"🧠 thinking: {h(truncate(first_line(resp.content, 300), 300))}",
-                         kind="thinking", task_id=task_id, text=resp.content)
+            plan = visible_text(resp.content)
+            if plan:
+                self.say(f"🧠 thinking: {h(truncate(first_line(plan, 300), 300))}",
+                         kind="thinking", task_id=task_id, text=plan)
 
             for tc in resp.tool_calls:
                 name = tc["function"]["name"]
@@ -172,6 +183,6 @@ class Agent:
         try:
             resp = await self.llm.chat(ask, None)
             used = self.account(resp.prompt_tokens, resp.completion_tokens, resp.cost)
-            return resp.content.strip(), used
+            return visible_text(resp.content), used
         except LLMError as e:
             return f"(could not get a summary: {e})", 0

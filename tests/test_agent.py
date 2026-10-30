@@ -185,3 +185,10 @@ async def test_resume_after_restart(cfg):
     msgs = llm2.seen[0]
     assert msgs[0]["role"] == "system" and any(m["role"] == "tool" for m in msgs)
     assert "restarted" in msgs[-1]["content"]
+
+
+def test_think_blocks_hidden():
+    from agent import visible_text
+    assert visible_text("<think>secret plan\nmore</think>\nListing files now.") == "Listing files now."
+    assert visible_text("<think>unterminated") == ""
+    assert visible_text("plain") == "plain"
