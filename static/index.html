@@ -388,6 +388,7 @@ async function loadState() {
   for (const aid of [...approvalsShown.keys()]) if (!j.pending_approvals.some((a) => a.aid === aid)) hideApproval(aid);
 
   $("info").innerHTML = `<div>Workdir</div><div><code>${esc(s.workdir)}</code></div>
+    <div>Access</div><div>${esc(s.access)} · approvals ${s.approvals ? "on" : "off"}</div>
     <div>Max steps</div><div>${s.max_steps}</div><div>Goal every</div><div>${s.goal_interval_min} min</div>
     <div>Tokens in/out</div><div>${fmtTok(s.prompt_tokens)} / ${fmtTok(s.completion_tokens)}</div>`;
 }

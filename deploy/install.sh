@@ -15,7 +15,12 @@ fi
 "$DIR/.venv/bin/pip" install -q --upgrade pip
 "$DIR/.venv/bin/pip" install -q -r "$DIR/requirements.txt"
 
-sed -e "s#__USER__#$USER_NAME#g" -e "s#__DIR__#$DIR#g" "$DIR/deploy/myagent.service" \
+# ACCESS=full: allow sudo (NoNewPrivileges blocks it) and use the real /tmp.
+EXTRA=()
+if grep -qiE '^ACCESS=full' "$DIR/.env"; then
+  EXTRA=(-e '/^NoNewPrivileges=/d' -e '/^PrivateTmp=/d')
+fi
+sed -e "s#__USER__#$USER_NAME#g" -e "s#__DIR__#$DIR#g" "${EXTRA[@]}" "$DIR/deploy/myagent.service" \
   | $SUDO tee /etc/systemd/system/myagent.service >/dev/null
 $SUDO systemctl daemon-reload
 $SUDO systemctl enable --now myagent

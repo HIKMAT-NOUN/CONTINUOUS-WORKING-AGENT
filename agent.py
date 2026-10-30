@@ -24,10 +24,7 @@ SYSTEM_PROMPT = """You are an autonomous worker agent running 24/7 on a Linux se
 supervises you through Telegram and sees every tool call you make.
 
 Working directory (WORKDIR): {workdir}
-- shell() runs bash in WORKDIR. read_file/write_file/list_dir only work inside WORKDIR.
-- Risky shell commands (deleting recursively, sudo, touching paths outside WORKDIR, piping \
-downloads into a shell, ...) are sent to the human for approval. If one is denied, do not retry \
-it; find another way or explain why it is needed.
+{access}
 - Before each batch of tool calls, write ONE short sentence saying what you are about to do \
 and why. It is shown to the human as your plan.
 - Use send_update for notable milestones in long tasks; don't spam it.
@@ -43,6 +40,23 @@ def visible_text(content: str) -> str:
     """Hide reasoning blocks (<think>…</think>, e.g. MiniMax/DeepSeek) from what the human sees.
     The full content stays in the conversation history sent back to the model."""
     return _THINK.sub("", content or "").strip()
+
+
+def access_rules(cfg: "Config") -> str:
+    if cfg.full_access:
+        rules = ("- You have FULL ACCESS to this machine: shell() starts in WORKDIR but may work anywhere, "
+                 "and read_file/write_file/list_dir accept any path (relative paths are relative to WORKDIR). "
+                 "Shell commands are non-interactive (no stdin): use sudo -n and flags like -y.")
+    else:
+        rules = ("- shell() runs bash in WORKDIR. read_file/write_file/list_dir only work inside WORKDIR.")
+    if cfg.approvals:
+        what = "deleting recursively, sudo, piping downloads into a shell, ..." + (
+            "" if cfg.full_access else " or touching paths outside WORKDIR")
+        rules += (f"\n- Risky shell commands ({what}) are sent to the human for approval. If one is "
+                  "denied, do not retry it; find another way or explain why it is needed.")
+    else:
+        rules += "\n- Commands run without approval. Be careful with destructive or irreversible actions."
+    return rules
 
 
 @dataclass
@@ -80,7 +94,8 @@ class Agent:
         self.hub = hub
         self.wait_if_paused = wait_if_paused
         self.on_step = on_step or (lambda n, s: None)
-        self.tools = Tools(cfg.workdir, cfg.secrets, approve, self._model_update, cfg.shell_timeout)
+        self.tools = Tools(cfg.workdir, cfg.secrets, approve, self._model_update, cfg.shell_timeout,
+                           cfg.full_access, cfg.approvals)
 
     # narration helpers ----------------------------------------------------------
     def say(self, text_html: str, level: str = "steps", kind: str = "info", **data) -> None:
@@ -108,7 +123,8 @@ class Agent:
         else:
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT.format(
-                    workdir=self.cfg.workdir, max_steps=self.cfg.max_steps_per_task)},
+                    workdir=self.cfg.workdir, max_steps=self.cfg.max_steps_per_task,
+                    access=access_rules(self.cfg))},
                 {"role": "user", "content": task["description"]},
             ]
 

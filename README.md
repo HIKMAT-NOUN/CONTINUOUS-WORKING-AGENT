@@ -113,6 +113,29 @@ cd ~/myagent && git pull && .venv/bin/pip install -r requirements.txt && sudo sy
 
 ---
 
+## Giving the agent full access
+By default the agent is confined to `WORKDIR` and asks before risky commands. To let it
+work anywhere on the machine, set this in `.env` and restart:
+```ini
+ACCESS=full       # file tools and shell may use any path this user can reach
+APPROVALS=on      # still ask before sudo / rm -rf / curl|sh / mkfs ... (set off to never ask)
+```
+For root-level work, also let the agent's user run `sudo` without a password. The agent
+can't type a password:
+```bash
+echo "$(id -un) ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/myagent && sudo chmod 440 /etc/sudoers.d/myagent
+```
+If you run it as a service, re-run `./deploy/install.sh` after setting `ACCESS=full`. The
+script then drops the `NoNewPrivileges` and `PrivateTmp` restrictions that would block
+`sudo`. To undo root access:
+```bash
+sudo rm /etc/sudoers.d/myagent
+```
+
+> ⚠️ With `ACCESS=full`, passwordless sudo and `APPROVALS=off`, the model can do anything
+> to this machine, including deleting it. Prefer to keep `APPROVALS=on` so destructive
+> commands still need your click.
+
 ## Commands (the same in web, CLI and Telegram)
 Plain text without a leading `/` is added as a task.
 

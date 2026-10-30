@@ -15,7 +15,7 @@ KEYS = (
     "WORKDIR", "GOAL_INTERVAL", "MAX_STEPS_PER_TASK", "DAILY_TOKEN_BUDGET",
     "PRICE_INPUT_PER_M", "PRICE_OUTPUT_PER_M",
     "APPROVAL_TIMEOUT", "SHELL_TIMEOUT", "LLM_TIMEOUT", "DB_PATH", "LOG_DIR",
-    "DEFAULT_VERBOSE", "WEB_ENABLED", "WEB_HOST", "WEB_PORT", "WEB_TOKEN",
+    "DEFAULT_VERBOSE", "WEB_ENABLED", "WEB_HOST", "WEB_PORT", "WEB_TOKEN", "ACCESS", "APPROVALS",
 )
 
 
@@ -46,6 +46,8 @@ class Config:
     web_host: str = "127.0.0.1"
     web_port: int = 8765
     web_token: str = field(default="", repr=False)   # empty -> generated and stored in the DB
+    full_access: bool = False   # ACCESS=full: tools may touch any path on the machine
+    approvals: bool = True      # APPROVALS=off: never ask, run every command
 
     @property
     def telegram_enabled(self) -> bool:
@@ -118,6 +120,8 @@ def load_config(env_file: Path | None = None) -> Config:
         web_host=v.get("WEB_HOST") or "127.0.0.1",
         web_port=int(v.get("WEB_PORT") or 8765),
         web_token=(v.get("WEB_TOKEN") or "").strip(),
+        full_access=(v.get("ACCESS", "workdir").strip().lower() == "full"),
+        approvals=(v.get("APPROVALS", "on").strip().lower() not in ("0", "false", "no", "off")),
     )
 
 

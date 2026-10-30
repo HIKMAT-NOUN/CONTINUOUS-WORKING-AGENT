@@ -15,13 +15,16 @@ class PathError(Exception):
     pass
 
 
-def resolve_in_workdir(workdir: Path, path: str) -> Path:
-    """Resolve path relative to workdir and refuse anything that escapes it (incl. symlinks)."""
+def resolve_in_workdir(workdir: Path, path: str, full_access: bool = False) -> Path:
+    """Resolve path relative to workdir and refuse anything that escapes it (incl. symlinks).
+    With full_access, any path is allowed (relative paths are still relative to workdir)."""
     raw = os.path.expanduser(path or ".")
     p = Path(raw)
     if not p.is_absolute():
         p = workdir / p
     real = Path(os.path.realpath(p))
+    if full_access:
+        return real
     root = Path(os.path.realpath(workdir))
     if real != root and root not in real.parents:
         raise PathError(f"path is outside WORKDIR: {path}")
@@ -88,13 +91,18 @@ def _cd_home(command: str) -> bool:
     return bool(re.search(r"(?:^|[;&|(]\s*)cd\s*(?:$|[;&|)])", command.strip()))
 
 
-def danger_reason(command: str, workdir: Path) -> str | None:
-    """Return why a command needs approval, or None if it may run unattended."""
+def danger_reason(command: str, workdir: Path, full_access: bool = False) -> str | None:
+    """Return why a command needs approval, or None if it may run unattended.
+    With full_access only the destructive patterns count, not paths outside WORKDIR."""
     if _recursive_rm(command):
         return "matches dangerous pattern: rm -rf"
     for name, rx in DANGEROUS_PATTERNS:
+        if name == "home/env expansion" and full_access:
+            continue
         if rx.search(command):
             return f"matches dangerous pattern: {name}"
+    if full_access:
+        return None
     if _cd_home(command):
         return "changes directory outside WORKDIR"
     candidates = _path_candidates(command)

@@ -143,12 +143,17 @@ UpdateFn = Callable[[str], None]
 
 class Tools:
     def __init__(self, workdir: Path, secrets: list[str], approve: ApproveFn, update: UpdateFn,
-                 default_shell_timeout: int = 120):
+                 default_shell_timeout: int = 120, full_access: bool = False, approvals: bool = True):
         self.workdir = workdir
         self.secrets = secrets
         self.approve = approve
         self.update = update
         self.default_shell_timeout = default_shell_timeout
+        self.full_access = full_access
+        self.approvals = approvals
+
+    def _path(self, path: str) -> Path:
+        return resolve_in_workdir(self.workdir, path, self.full_access)
 
     async def call(self, name: str, args: dict) -> ToolResult:
         fn = getattr(self, f"t_{name}", None)
@@ -174,7 +179,7 @@ class Tools:
 
     async def t_shell(self, command: str, timeout: int | None = None) -> ToolResult:
         timeout = max(1, min(int(timeout or self.default_shell_timeout), 1800))
-        reason = danger_reason(command, self.workdir)
+        reason = danger_reason(command, self.workdir, self.full_access) if self.approvals else None
         if reason:
             if not await self.approve(command, reason):
                 return ToolResult(False, "error: the human DENIED this command. Do not retry it; "
@@ -219,7 +224,7 @@ class Tools:
 
     # files ------------------------------------------------------------------
     async def t_read_file(self, path: str, offset: int = 0, max_chars: int = LLM_OUTPUT_LIMIT) -> ToolResult:
-        p = resolve_in_workdir(self.workdir, path)
+        p = self._path(path)
         if not p.is_file():
             return ToolResult(False, f"error: not a file: {path}", f"not a file: {path}")
         data = await asyncio.to_thread(p.read_bytes)
@@ -232,7 +237,7 @@ class Tools:
         return ToolResult(True, chunk + note, f"{len(text)} chars")
 
     async def t_write_file(self, path: str, content: str, append: bool = False) -> ToolResult:
-        p = resolve_in_workdir(self.workdir, path)
+        p = self._path(path)
         if p.is_dir():
             return ToolResult(False, f"error: is a directory: {path}", f"is a directory: {path}")
 
@@ -242,11 +247,10 @@ class Tools:
                 f.write(content)
 
         await asyncio.to_thread(write)
-        rel = p.relative_to(Path(os.path.realpath(self.workdir)))
-        return ToolResult(True, f"wrote {len(content)} chars to {rel}", f"{len(content)} chars written")
+        return ToolResult(True, f"wrote {len(content)} chars to {p}", f"{len(content)} chars written")
 
     async def t_list_dir(self, path: str = ".") -> ToolResult:
-        p = resolve_in_workdir(self.workdir, path)
+        p = self._path(path)
         if not p.is_dir():
             return ToolResult(False, f"error: not a directory: {path}", f"not a directory: {path}")
         entries = sorted(p.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))

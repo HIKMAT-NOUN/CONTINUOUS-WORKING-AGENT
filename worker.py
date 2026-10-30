@@ -253,6 +253,8 @@ class Worker:
             "verbose": self.hub.verbosity,
             "model": self.cfg.model,
             "workdir": str(self.cfg.workdir),
+            "access": "full" if self.cfg.full_access else "workdir only",
+            "approvals": self.cfg.approvals,
         }
 
     def status_html(self) -> str:

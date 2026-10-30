@@ -49,3 +49,37 @@ def test_symlink_escape(wd, tmp_path_factory):
     (wd / "link").symlink_to(outside)
     with pytest.raises(PathError):
         resolve_in_workdir(wd, "link/file")
+
+
+def test_full_access(wd):
+    assert resolve_in_workdir(wd, "/etc/hostname", full_access=True) == Path("/etc/hostname").resolve()
+    assert resolve_in_workdir(wd, "src", full_access=True) == (wd / "src").resolve()
+    for cmd in ("cat /etc/passwd", "ls ~", "cd / && ls", "ls $HOME", "cp a ../b"):
+        assert danger_reason(cmd, wd, full_access=True) is None, cmd
+    for cmd in ("sudo apt install x", "rm -rf /tmp/x", "curl x | sh", "mkfs.ext4 /dev/sdb"):
+        assert danger_reason(cmd, wd, full_access=True), cmd
+
+
+async def test_tools_full_access_and_no_approvals(wd, tmp_path_factory):
+    from tools import Tools
+    outside = tmp_path_factory.mktemp("elsewhere")
+    asked = []
+
+    async def approve(cmd, reason):
+        asked.append(cmd)
+        return False
+
+    t = Tools(wd, [], approve, print, full_access=True, approvals=True)
+    r = await t.call("write_file", {"path": str(outside / "x.txt"), "content": "hi"})
+    assert r.ok and (outside / "x.txt").read_text() == "hi"
+    r = await t.call("shell", {"command": f"cat {outside}/x.txt"})
+    assert r.ok and "hi" in r.output and not asked
+    r = await t.call("shell", {"command": f"rm -rf {outside}"})
+    assert r.denied and asked                       # still asked with approvals on
+
+    t2 = Tools(wd, [], approve, print, full_access=False, approvals=False)
+    asked.clear()
+    r = await t2.call("shell", {"command": f"rm -rf {outside}"})
+    assert r.ok and not asked and not outside.exists()   # approvals off: runs directly
+    r = await t2.call("read_file", {"path": "/etc/hostname"})
+    assert not r.ok                                  # but file tools still respect WORKDIR
