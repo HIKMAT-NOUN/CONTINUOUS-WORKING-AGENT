@@ -149,6 +149,7 @@ Plain text without a leading `/` is added as a task.
 | `/stop` | abort the current task, including a running shell command |
 | `/stopall` | abort the current task **and** clear the whole queue |
 | `/review on\|off` | turn the automatic review agent on or off at runtime |
+| `/reasoning auto\|low\|medium\|high\|max\|off` | set the model's thinking depth (MiniMax reasoning_effort / thinking) |
 | `/approve [id]`, `/deny [id]` | answer a pending approval (`y`/`n` in the CLI) |
 | `/verbose off\|steps\|full` | narration level for Telegram and the CLI |
 | `/log` | last 20 steps |

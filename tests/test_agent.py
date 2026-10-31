@@ -25,9 +25,11 @@ class ScriptedLLM:
     def __init__(self, script):
         self.script = list(script)
         self.seen = []
+        self.extras = []
 
-    async def chat(self, messages, tools=None):
+    async def chat(self, messages, tools=None, extra=None):
         self.seen.append(list(messages))
+        self.extras.append(extra or {})
         if not self.script:  # behave like a hung request
             await asyncio.Event().wait()
         content, calls = self.script.pop(0)
@@ -230,7 +232,7 @@ async def test_spawn_workers_and_review(cfg):
         def __init__(self):
             self.seen = []
             self.lead_step = 0
-        async def chat(self, messages, tools=None):
+        async def chat(self, messages, tools=None, extra=None):
             self.seen.append(list(messages))
             role_sys = messages[0]["content"]
             if "You are a helper agent spawned" in role_sys:
@@ -276,3 +278,30 @@ async def test_spawn_workers_and_review(cfg):
     assert any(aid.startswith("w") for aid in snap) and any(aid.startswith("r") for aid in snap)
     # steps were logged per-agent
     assert {s["agent"] for s in db.last_steps(50)} >= {"main"}
+
+
+def test_reasoning_params():
+    from llm import reasoning_params
+    assert reasoning_params("") == {} and reasoning_params("auto") == {}
+    assert reasoning_params("high") == {"reasoning_effort": "high"}
+    assert reasoning_params("max") == {"reasoning_effort": "max"}
+    assert reasoning_params("minimal") == {"reasoning_effort": "low"}
+    assert reasoning_params("off") == {"thinking": {"type": "disabled"}}
+    assert reasoning_params("nonsense") == {}
+
+
+async def test_reasoning_flows_to_llm(cfg):
+    from dataclasses import replace
+    cfg = replace(cfg, reasoning="high")
+    llm = ScriptedLLM([("done", None)])
+    db, bot, n, w = build(cfg, llm)
+    db.add_task("t")
+    wt = asyncio.create_task(w.run_forever())
+    await run_until(lambda: db.get_task(1)["status"] == "done")
+    wt.cancel(); await asyncio.gather(wt, return_exceptions=True)
+    assert llm.extras[0] == {"reasoning_effort": "high"}
+    # runtime override via /reasoning wins over cfg
+    from commands import Commands
+    c = Commands(db, w, __import__("approvals").Approvals(w.hub, 5))
+    await c.handle("/reasoning off")
+    assert w.reasoning == "off" and db.get("reasoning") == "off"

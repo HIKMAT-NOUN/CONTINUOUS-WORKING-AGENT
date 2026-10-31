@@ -24,12 +24,13 @@ HELP = """<b>Commands</b> (plain text without a / is added as a task)
 /stop — abort the current task
 /stopall — abort the current task AND clear the whole queue
 /review on|off — turn the automatic review agent on or off
+/reasoning auto|low|medium|high|max|off — set the model's thinking depth
 /approve &lt;id&gt;, /deny &lt;id&gt; — answer a pending approval (id optional if only one)
 /verbose off|steps|full — narration level for Telegram and the CLI
 /log — last 20 steps"""
 
 NAMES = ("task", "goal", "status", "queue", "pause", "resume", "stop", "stopall", "cancelall",
-         "review", "approve", "deny", "verbose", "log", "help", "start")
+         "review", "reasoning", "approve", "deny", "verbose", "log", "help", "start")
 
 
 class Commands:
@@ -115,6 +116,17 @@ class Commands:
         return "🧹 " + ("; ".join(parts) + ".") if parts else "Nothing to stop — no task running and the queue is empty."
 
     c_cancelall = c_stopall
+
+    REASONING_LEVELS = ("auto", "low", "medium", "high", "max", "off")
+
+    def c_reasoning(self, arg, source):
+        a = arg.strip().lower()
+        if a in self.REASONING_LEVELS:
+            self.worker.set_reasoning(a)
+            note = " (MiniMax-M3 only; M3.1-Flash rejects it)" if a == "off" else ""
+            return f"🧠 Reasoning depth set to <b>{a}</b>.{note}"
+        return (f"🧠 Reasoning depth is <b>{h(self.worker.reasoning)}</b>. "
+                "Usage: /reasoning auto|low|medium|high|max|off")
 
     def c_review(self, arg, source):
         a = arg.strip().lower()

@@ -19,7 +19,7 @@ button.primary { background:var(--accent); border-color:var(--accent); color:#ff
 button.primary:hover { filter:brightness(1.08); }
 button.danger { color:var(--err); } button.ok { color:var(--ok); }
 button:disabled { opacity:.45; cursor:default; }
-input,textarea { font:inherit; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px 10px; width:100%; }
+input,textarea,select { font:inherit; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px 10px; width:100%; }
 
 #gate { display:grid; place-items:center; height:100vh; padding:16px; }
 #gate .box { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:26px; width:min(400px,92vw); }
@@ -136,6 +136,8 @@ aside { overflow:auto; padding:13px; display:flex; flex-direction:column; gap:13
         </div>
         <div class="muted" style="margin:10px 0 5px">Auto-review agent</div>
         <div class="seg" id="reviewSeg"><button data-r="on">on</button><button data-r="off">off</button></div>
+        <div class="muted" style="margin:10px 0 5px">Reasoning depth <span title="How much the model thinks before answering. Higher = better but slower/pricier. 'off' only works on MiniMax-M3, not M3.1-Flash.">ⓘ</span></div>
+        <select id="reasoningSel"><option value="auto">auto (model default)</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="max">max</option><option value="off">off (no thinking)</option></select>
         <div class="muted" style="margin:10px 0 5px">Narration (Telegram / CLI)</div>
         <div class="seg" id="verbSeg"><button data-v="off">off</button><button data-v="steps">steps</button><button data-v="full">full</button></div>
       </div>
@@ -243,6 +245,7 @@ function renderState(s) {
   $("pauseBtn").disabled=s.state==="paused"; $("resumeBtn").disabled=s.state!=="paused"; $("stopBtn").disabled=!s.current;
   document.querySelectorAll("#verbSeg button").forEach(b=>b.classList.toggle("on", b.dataset.v===s.verbose));
   document.querySelectorAll("#reviewSeg button").forEach(b=>b.classList.toggle("on", (b.dataset.r==="on")===!!s.review));
+  if (s.reasoning && document.activeElement!==$("reasoningSel")) $("reasoningSel").value=s.reasoning;
   $("goalText").textContent=s.goal||"None";
   $("queueCount").textContent=s.queue_count?`(${s.queue_count})`:"";
   const q=$("queue"); q.innerHTML=(s.queue&&s.queue.length)?"":'<div class="muted">Empty</div>';
@@ -298,6 +301,7 @@ $("resumeBtn").onclick=()=>send("/resume");
 $("stopBtn").onclick=()=>{ if(confirm("Abort the current task?")) send("/stop"); };
 $("stopAllBtn").onclick=()=>{ if(confirm("Abort the current task AND clear the whole queue?")) send("/stopall"); };
 document.querySelectorAll("#reviewSeg button").forEach(b=>b.onclick=()=>send("/review "+b.dataset.r));
+$("reasoningSel").onchange=()=>send("/reasoning "+$("reasoningSel").value);
 $("goalSet").onclick=()=>{ const g=$("goalInput").value.trim(); if(g){send("/goal "+g); $("goalInput").value="";} };
 $("goalClear").onclick=()=>send("/goal clear");
 document.querySelectorAll("#verbSeg button").forEach(b=>b.onclick=()=>send("/verbose "+b.dataset.v));

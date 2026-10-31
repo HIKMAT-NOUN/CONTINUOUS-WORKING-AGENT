@@ -14,6 +14,25 @@ class LLMError(Exception):
     pass
 
 
+# Reasoning/thinking depth for providers that support it. MiniMax M3.1-Flash uses
+# reasoning_effort (low..max); MiniMax-M3 uses thinking {type: adaptive|disabled}.
+# "auto"/"" sends nothing (provider default). "off" disables thinking (M3; M3.1-Flash
+# rejects this with HTTP 400 — that is surfaced to the user).
+_EFFORT = {"minimal": "low", "low": "low", "medium": "medium", "high": "high",
+           "xhigh": "max", "max": "max", "ultra": "max"}
+
+
+def reasoning_params(level: str | None) -> dict:
+    level = (level or "").strip().lower()
+    if level in ("", "auto", "default"):
+        return {}
+    if level in ("off", "none", "disabled"):
+        return {"thinking": {"type": "disabled"}}
+    if level in _EFFORT:
+        return {"reasoning_effort": _EFFORT[level]}
+    return {}
+
+
 @dataclass
 class LLMResponse:
     message: dict                          # assistant message, ready to append to history
@@ -36,10 +55,13 @@ class LLM:
     async def close(self) -> None:
         await self.client.aclose()
 
-    async def chat(self, messages: list[dict], tools: list[dict] | None = None) -> LLMResponse:
+    async def chat(self, messages: list[dict], tools: list[dict] | None = None,
+                   extra: dict | None = None) -> LLMResponse:
         body: dict = {"model": self.model, "messages": messages}
         if tools:
             body["tools"] = tools
+        if extra:
+            body.update(extra)
         delay = 2.0
         for attempt in range(1, 7):
             try:

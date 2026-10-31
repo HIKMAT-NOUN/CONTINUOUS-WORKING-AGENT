@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Awaitable, Callable
 
-from llm import LLM, LLMError
+from llm import LLM, LLMError, reasoning_params
 from hub import Hub
 from textfmt import code, h, truncate
 from tools import Tools, first_line
@@ -147,6 +147,9 @@ class Agent:
     def _model_update(self, text: str) -> None:
         self.say(f"💬 {h(text)}", kind="update", text=text)
 
+    def _reasoning(self) -> dict:
+        return reasoning_params(self.db.get("reasoning") or self.cfg.reasoning)
+
     def account(self, prompt: int, completion: int, provider_cost: float | None) -> int:
         cost = provider_cost if provider_cost is not None else (
             prompt * self.cfg.price_input_per_m + completion * self.cfg.price_output_per_m) / 1e6
@@ -173,7 +176,7 @@ class Agent:
             await self.wait_if_paused()  # also enforces the daily token budget
             self.on_update(step=steps, thinking="")
             try:
-                resp = await self.llm.chat(messages, tools_specs)
+                resp = await self.llm.chat(messages, tools_specs, self._reasoning())
             except LLMError as e:
                 return Outcome("failed", f"LLM error: {e}", steps, tokens)
             tokens += self.account(resp.prompt_tokens, resp.completion_tokens, resp.cost)

@@ -124,6 +124,14 @@ class Worker:
                 pass
 
     @property
+    def reasoning(self) -> str:
+        v = self.db.get("reasoning")
+        return (self.cfg.reasoning or "auto") if v is None else (v or "auto")
+
+    def set_reasoning(self, level: str) -> None:
+        self.db.set("reasoning", level)
+
+    @property
     def review_enabled(self) -> bool:
         v = self.db.get("review_enabled")
         return self.cfg.review if v is None else v == "1"
@@ -320,6 +328,7 @@ class Worker:
             "approvals": self.cfg.approvals,
             "max_workers": self.cfg.max_workers,
             "review": self.review_enabled,
+            "reasoning": self.reasoning,
             "recent": self.db.recent_tasks(12),
             "pending_approvals": [{"aid": a, "command": p["command"], "reason": p["reason"],
                                    "agent": p.get("agent", "main")}
