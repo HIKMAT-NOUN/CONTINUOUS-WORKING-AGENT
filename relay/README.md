@@ -18,6 +18,16 @@ Pick two long random secrets (e.g. `openssl rand -hex 24` each):
 
 Keep them secret: anyone with `RELAY_USER_TOKEN` can send commands to your agent.
 
+## One-shot setup on a VM (Oracle, or any Linux) + Cloudflare Tunnel
+If you have a VM you can SSH into and a domain on Cloudflare, this script does the whole
+setup — installs the relay and cloudflared, runs both as services, and prints the exact
+values for the app and the agent's .env. It opens no ports (the tunnel dials out). Re-run
+safe. The Cloudflare login (browser) and your domain are the only manual bits.
+```bash
+curl -fsSL https://raw.githubusercontent.com/HIKMAT-NOUN/continuous-working-agent/main/relay/setup-oracle.sh -o setup-oracle.sh
+bash setup-oracle.sh agent.yourdomain.com
+```
+
 ## Run it (pick one host)
 
 **Docker (any VPS):**
