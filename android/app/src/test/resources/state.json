@@ -1,0 +1,58 @@
+{
+ "type": "state",
+ "state": {
+  "state": "idle",
+  "pause_reason": "",
+  "current": null,
+  "fleet": [
+   {
+    "id": "main",
+    "role": "main",
+    "parent": null,
+    "title": "idle",
+    "status": "idle",
+    "step": 0,
+    "max_steps": 0,
+    "action": "",
+    "thinking": "",
+    "started": 1793448210.7592137,
+    "finished": null,
+    "result": ""
+   }
+  ],
+  "max_steps": 0,
+  "queue": [
+   {
+    "id": 1,
+    "kind": "task",
+    "description": "write the readme",
+    "created_at": 1793448210.7597408
+   }
+  ],
+  "queue_count": 1,
+  "goal": "keep tests green",
+  "goal_interval_min": 45.0,
+  "tokens_today": 0,
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "budget": 2000000,
+  "cost_today": 0.0,
+  "verbose": "steps",
+  "model": "m",
+  "workdir": "/tmp/pytest-of-root/pytest-4/test_dump0/work",
+  "access": "workdir only",
+  "approvals": true,
+  "max_workers": 2,
+  "review": true,
+  "reasoning": "high",
+  "recent": [],
+  "pending_approvals": [
+   {
+    "aid": "30e0d7",
+    "command": "rm -rf build/",
+    "reason": "deletes files outside the workdir",
+    "agent": "w1"
+   }
+  ]
+ }
+}

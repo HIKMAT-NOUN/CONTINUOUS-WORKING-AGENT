@@ -13,7 +13,8 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
 /** Talks to the relay from the phone. Both the agent and this app dial out to the relay,
- *  so the agent machine needs no open port. Reconnects on its own with backoff. */
+ *  so the agent machine needs no open port. Reconnects on its own with backoff.
+ *  Only wss:// (TLS) URLs are accepted, so the token is never sent in the clear. */
 class RelayClient(
     private val baseUrl: String,   // wss://host/ws/app
     private val token: String,
@@ -27,20 +28,29 @@ class RelayClient(
         fun onState(state: JSONObject)
         fun onReply(ref: String?, html: String)
         fun onPresence(agentOnline: Boolean)
+        fun onUploadAck(ref: String?, files: JSONArray?, error: String?)
+    }
+
+    companion object {
+        fun isSecureUrl(url: String) = url.trim().lowercase().startsWith("wss://")
     }
 
     private val http = OkHttpClient.Builder()
         .pingInterval(25, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
-    private var ws: WebSocket? = null
+    @Volatile private var ws: WebSocket? = null
     private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
     private var backoffSec = 2L
     private var lastId = 0L
-    private var closed = false
+    @Volatile private var closed = false
 
     fun connect() {
         closed = false
+        if (!isSecureUrl(baseUrl)) {          // never send the token over plain ws://
+            listener.onDisconnected("relay URL must start with wss://")
+            return
+        }
         open()
     }
 
@@ -75,9 +85,13 @@ class RelayClient(
                             if (m.isNull("ref")) null else m.optString("ref"),
                             m.optString("html"))
                         "presence" -> listener.onPresence(m.optBoolean("agent_online"))
+                        "upload_ack" -> listener.onUploadAck(
+                            if (m.isNull("ref")) null else m.optString("ref"),
+                            m.optJSONArray("files"),
+                            if (m.has("error") && !m.isNull("error")) m.optString("error") else null)
                     }
                 } catch (e: Exception) {
-                    Log.w("relay", "bad message", e)
+                    Log.w("relay", "bad message: ${e.javaClass.simpleName}")   // never log payloads
                 }
             }
 
@@ -98,16 +112,23 @@ class RelayClient(
         if (closed) return
         val delay = backoffSec
         backoffSec = minOf(backoffSec * 2, 30)
-        scheduler.schedule({ open() }, delay, TimeUnit.SECONDS)
+        try { scheduler.schedule({ open() }, delay, TimeUnit.SECONDS) } catch (_: Exception) {}
     }
 
-    /** Send a command (plain text or /command). Returns the ref used, for matching the reply. */
-    fun sendCommand(text: String): String {
-        val ref = System.nanoTime().toString()
-        val payload = JSONObject()
-            .put("type", "command").put("text", text).put("ref", ref)
-        ws?.send(payload.toString())
-        return ref
+    private fun newRef() = System.nanoTime().toString()
+
+    /** Send a command (plain text or /command). Returns the ref used, or null if not connected. */
+    fun sendCommand(text: String): String? {
+        val ref = newRef()
+        val payload = JSONObject().put("type", "command").put("text", text).put("ref", ref)
+        return if (ws?.send(payload.toString()) == true) ref else null
+    }
+
+    /** Send a file as base64. The agent saves it under WORKDIR/uploads and answers with an
+     *  upload_ack carrying the same ref. Returns false if it couldn't be queued. */
+    fun sendUpload(name: String, base64: String, ref: String): Boolean {
+        val payload = JSONObject().put("type", "upload").put("name", name).put("data", base64).put("ref", ref)
+        return ws?.send(payload.toString()) == true
     }
 
     fun close() {

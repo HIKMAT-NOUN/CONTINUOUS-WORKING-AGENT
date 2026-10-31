@@ -1,7 +1,7 @@
 <resources>
     <style name="Theme.MyAgent" parent="android:Theme.Material.NoActionBar">
-        <item name="android:statusBarColor">#0E1015</item>
-        <item name="android:navigationBarColor">#0E1015</item>
-        <item name="android:windowBackground">#0E1015</item>
+        <item name="android:statusBarColor">#171716</item>
+        <item name="android:navigationBarColor">#171716</item>
+        <item name="android:windowBackground">#171716</item>
     </style>
 </resources>

@@ -1,0 +1,38 @@
+[
+ {
+  "id": 2,
+  "ts": 1793448210.76094,
+  "kind": "approval",
+  "level": "always",
+  "html": "\u26a0\ufe0f <b>Approval needed</b> [30e0d7]\n<code>rm -rf build/</code>\nReason: deletes files outside the workdir\n(auto-deny in 0 min)",
+  "data": {
+   "aid": "30e0d7",
+   "command": "rm -rf build/",
+   "reason": "deletes files outside the workdir",
+   "timeout": 5
+  },
+  "agent": "w1"
+ },
+ {
+  "id": 3,
+  "ts": 1793448210.812451,
+  "kind": "approval_done",
+  "level": "always",
+  "html": "\u274c denied [30e0d7] (user): <code>rm -rf build/</code>",
+  "data": {
+   "aid": "30e0d7",
+   "approved": false,
+   "by": "user"
+  },
+  "agent": "w1"
+ },
+ {
+  "id": 4,
+  "ts": 1793448210.812562,
+  "kind": "clear",
+  "level": "always",
+  "html": "\ud83e\uddf9 Activity history cleared.",
+  "data": {},
+  "agent": "main"
+ }
+]
