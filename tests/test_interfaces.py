@@ -104,3 +104,18 @@ async def test_web_auth_api_and_ws(cfg):
         r = await client.post("/api/command", json={"text": "/queue"}, headers={"Authorization": f"Bearer {TOKEN}"})
         assert "Queue is empty" in (await r.json())["reply"]
         assert TOKEN not in json.dumps(db.events_after(0, 1000))
+
+
+async def test_stopall_and_review_toggle(cfg):
+    db, hub, ap, w, c = build(cfg)
+    await c.handle("/task one"); await c.handle("/task two")
+    assert db.count_pending() == 2
+    msg = await c.handle("/stopall")
+    assert "cleared 2" in msg and db.count_pending() == 0
+    assert "Nothing to stop" in await c.handle("/stopall")
+    # auto-review toggle (default on from cfg fixture? fixture sets review=False)
+    assert "off" in (await c.handle("/review")).lower() or "on" in (await c.handle("/review")).lower()
+    await c.handle("/review on"); assert w.review_enabled is True
+    await c.handle("/review off"); assert w.review_enabled is False
+    # the review tool is hidden from the lead when review is off and no workers
+    assert "request_review" not in [t["function"]["name"] for t in w.agent.tools.specs()]

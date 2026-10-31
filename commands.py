@@ -22,12 +22,14 @@ HELP = """<b>Commands</b> (plain text without a / is added as a task)
 /queue — list pending tasks
 /pause, /resume — pause or resume the worker (/resume force ignores the daily budget)
 /stop — abort the current task
+/stopall — abort the current task AND clear the whole queue
+/review on|off — turn the automatic review agent on or off
 /approve &lt;id&gt;, /deny &lt;id&gt; — answer a pending approval (id optional if only one)
 /verbose off|steps|full — narration level for Telegram and the CLI
 /log — last 20 steps"""
 
-NAMES = ("task", "goal", "status", "queue", "pause", "resume", "stop", "approve", "deny",
-         "verbose", "log", "help", "start")
+NAMES = ("task", "goal", "status", "queue", "pause", "resume", "stop", "stopall", "cancelall",
+         "review", "approve", "deny", "verbose", "log", "help", "start")
 
 
 class Commands:
@@ -102,6 +104,25 @@ class Commands:
     def c_stop(self, arg, source):
         tid = self.worker.stop_current()
         return f"🛑 Stopping task #{tid}…" if tid else "Nothing is running."
+
+    def c_stopall(self, arg, source):
+        cleared, tid = self.worker.stop_all()
+        parts = []
+        if tid:
+            parts.append(f"aborting current task #{tid}")
+        if cleared:
+            parts.append(f"cleared {cleared} queued task(s)")
+        return "🧹 " + ("; ".join(parts) + ".") if parts else "Nothing to stop — no task running and the queue is empty."
+
+    c_cancelall = c_stopall
+
+    def c_review(self, arg, source):
+        a = arg.strip().lower()
+        if a in ("on", "off"):
+            self.worker.set_review(a == "on")
+            return f"🔎 Automatic review turned <b>{a}</b>."
+        return (f"🔎 Automatic review is <b>{'on' if self.worker.review_enabled else 'off'}</b>. "
+                "Usage: /review on|off")
 
     def _answer(self, arg: str, approved: bool, source: str) -> str:
         aid = arg or self.approvals.only_pending_id()

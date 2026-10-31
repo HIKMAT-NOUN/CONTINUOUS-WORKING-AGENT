@@ -147,6 +147,8 @@ Plain text without a leading `/` is added as a task.
 | `/queue` | list pending tasks |
 | `/pause`, `/resume` | pause or resume the worker (`/resume force` ignores the daily budget) |
 | `/stop` | abort the current task, including a running shell command |
+| `/stopall` | abort the current task **and** clear the whole queue |
+| `/review on\|off` | turn the automatic review agent on or off at runtime |
 | `/approve [id]`, `/deny [id]` | answer a pending approval (`y`/`n` in the CLI) |
 | `/verbose off\|steps\|full` | narration level for Telegram and the CLI |
 | `/log` | last 20 steps |

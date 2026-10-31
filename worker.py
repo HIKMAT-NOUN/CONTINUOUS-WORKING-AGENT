@@ -51,7 +51,8 @@ class Worker:
         self.fleet.register("main", "main", None, "idle", cfg.max_steps_per_task)
         self.fleet.set_main_status("idle")
         self.builder = AgentBuilder(cfg, db, llm, hub, approvals, self.wait_if_paused, self.fleet)
-        self.spawner = Spawner(self.fleet, self.builder, cfg, lambda: self._main_task_id)
+        self.spawner = Spawner(self.fleet, self.builder, cfg, lambda: self._main_task_id,
+                               review_enabled=lambda: self.review_enabled)
         use_spawner = self.spawner if (cfg.max_workers > 0 or cfg.review) else None
         self.agent = self.builder.build("main", "main", spawner=use_spawner)
 
@@ -122,7 +123,22 @@ class Worker:
             except asyncio.TimeoutError:
                 pass
 
+    @property
+    def review_enabled(self) -> bool:
+        v = self.db.get("review_enabled")
+        return self.cfg.review if v is None else v == "1"
+
+    def set_review(self, on: bool) -> None:
+        self.db.set("review_enabled", "1" if on else "0")
+
     # control ----------------------------------------------------------------------
+    def stop_all(self) -> tuple[int, int | None]:
+        """Abort the current task and clear the whole queue. Returns (cleared, current_id)."""
+        cleared = self.db.cancel_pending()
+        tid = self.stop_current()
+        self.poke()
+        return cleared, tid
+
     def stop_current(self) -> int | None:
         if self.inner and not self.inner.done() and self.current:
             self.fleet.cancel_all_children()   # stop helpers/reviewers too
@@ -255,7 +271,7 @@ class Worker:
                 self.fleet.tasks.pop(aid, None)
 
     async def _auto_review(self, task: dict, out) -> None:
-        if not self.cfg.review or out.status != "done" or task["kind"] != "task":
+        if not self.review_enabled or out.status != "done" or task["kind"] != "task":
             return
         if self.paused or self.budget_exceeded():
             return
@@ -303,7 +319,7 @@ class Worker:
             "access": "full" if self.cfg.full_access else "workdir only",
             "approvals": self.cfg.approvals,
             "max_workers": self.cfg.max_workers,
-            "review": self.cfg.review,
+            "review": self.review_enabled,
             "recent": self.db.recent_tasks(12),
             "pending_approvals": [{"aid": a, "command": p["command"], "reason": p["reason"],
                                    "agent": p.get("agent", "main")}

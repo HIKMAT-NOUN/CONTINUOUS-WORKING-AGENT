@@ -132,7 +132,10 @@ aside { overflow:auto; padding:13px; display:flex; flex-direction:column; gap:13
           <button id="pauseBtn">⏸ Pause</button>
           <button id="resumeBtn">▶ Resume</button>
           <button id="stopBtn" class="danger">■ Stop</button>
+          <button id="stopAllBtn" class="danger" title="Abort the current task and clear the whole queue">🧹 Stop all</button>
         </div>
+        <div class="muted" style="margin:10px 0 5px">Auto-review agent</div>
+        <div class="seg" id="reviewSeg"><button data-r="on">on</button><button data-r="off">off</button></div>
         <div class="muted" style="margin:10px 0 5px">Narration (Telegram / CLI)</div>
         <div class="seg" id="verbSeg"><button data-v="off">off</button><button data-v="steps">steps</button><button data-v="full">full</button></div>
       </div>
@@ -239,6 +242,7 @@ function renderState(s) {
   $("meta").textContent=`${fmtTok(s.tokens_today)}/${fmtTok(s.budget)} · $${(s.cost_today||0).toFixed(3)} · ${s.model||""}`;
   $("pauseBtn").disabled=s.state==="paused"; $("resumeBtn").disabled=s.state!=="paused"; $("stopBtn").disabled=!s.current;
   document.querySelectorAll("#verbSeg button").forEach(b=>b.classList.toggle("on", b.dataset.v===s.verbose));
+  document.querySelectorAll("#reviewSeg button").forEach(b=>b.classList.toggle("on", (b.dataset.r==="on")===!!s.review));
   $("goalText").textContent=s.goal||"None";
   $("queueCount").textContent=s.queue_count?`(${s.queue_count})`:"";
   const q=$("queue"); q.innerHTML=(s.queue&&s.queue.length)?"":'<div class="muted">Empty</div>';
@@ -292,6 +296,8 @@ function send(text) {
 $("pauseBtn").onclick=()=>send("/pause");
 $("resumeBtn").onclick=()=>send("/resume");
 $("stopBtn").onclick=()=>{ if(confirm("Abort the current task?")) send("/stop"); };
+$("stopAllBtn").onclick=()=>{ if(confirm("Abort the current task AND clear the whole queue?")) send("/stopall"); };
+document.querySelectorAll("#reviewSeg button").forEach(b=>b.onclick=()=>send("/review "+b.dataset.r));
 $("goalSet").onclick=()=>{ const g=$("goalInput").value.trim(); if(g){send("/goal "+g); $("goalInput").value="";} };
 $("goalClear").onclick=()=>send("/goal clear");
 document.querySelectorAll("#verbSeg button").forEach(b=>b.onclick=()=>send("/verbose "+b.dataset.v));

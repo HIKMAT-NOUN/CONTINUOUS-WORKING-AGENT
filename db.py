@@ -120,6 +120,13 @@ class DB:
             "SELECT id,kind,description,created_at FROM tasks WHERE status='pending' "
             "ORDER BY id LIMIT ?", (limit,))]
 
+    def cancel_pending(self) -> int:
+        """Abort every queued (pending) task. Returns how many were cleared."""
+        n = self._q("SELECT COUNT(*) c FROM tasks WHERE status='pending'")[0]["c"]
+        if n:
+            self._x("UPDATE tasks SET status='aborted', finished_at=? WHERE status='pending'", (time.time(),))
+        return n
+
     def count_pending(self) -> int:
         return self._q("SELECT COUNT(*) c FROM tasks WHERE status='pending'")[0]["c"]
 

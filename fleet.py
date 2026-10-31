@@ -129,14 +129,19 @@ class AgentBuilder:
 class Spawner:
     """Delegation tools for the lead agent. Returns ToolResult objects."""
 
-    def __init__(self, fleet: Fleet, builder: AgentBuilder, cfg: "Config", parent_task_id_getter: Callable[[], int]):
+    def __init__(self, fleet: Fleet, builder: AgentBuilder, cfg: "Config",
+                 parent_task_id_getter: Callable[[], int], review_enabled: Callable[[], bool] | None = None):
         self.fleet = fleet
         self.builder = builder
         self.cfg = cfg
         self._parent_task_id = parent_task_id_getter
         self.results: dict[str, Outcome] = {}
         self.can_spawn = cfg.max_workers > 0
-        self.can_review = cfg.review
+        self._review_enabled = review_enabled
+
+    @property
+    def can_review(self) -> bool:
+        return self._review_enabled() if self._review_enabled else self.cfg.review
 
     async def _run_child(self, aid: str, role: str, job: Job) -> Outcome:
         agent = self.builder.build(aid, role, spawner=None)   # helpers/reviewers cannot delegate
