@@ -131,6 +131,44 @@ def make_app(token: str, db: "DB", hub: Hub, worker: "Worker", commands: "Comman
         reply = await commands.handle(str(body.get("text", "")), source=body.get("source") or "web")
         return web.json_response({"reply": reply})
 
+    async def upload(req: web.Request):
+        if not same_origin(req):
+            return web.json_response({"error": "bad origin"}, status=403)
+        import re as _re
+        from pathlib import Path as _Path
+        updir = _Path(worker.cfg.workdir) / "uploads"
+        updir.mkdir(parents=True, exist_ok=True)
+        saved = []
+        reader = await req.multipart()
+        async for part in reader:
+            if not getattr(part, "filename", None):
+                continue
+            raw = part.filename.replace("\\", "/").split("/")[-1]
+            name = _re.sub(r"[^A-Za-z0-9._-]", "_", raw)[:120] or "file"
+            dest = updir / name
+            i = 1
+            while dest.exists():
+                dest = updir / f"{dest.stem}-{i}{dest.suffix}"
+                i += 1
+            size = 0
+            with open(dest, "wb") as fh:
+                while True:
+                    chunk = await part.read_chunk(65536)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > 30 * 1024 * 1024:
+                        fh.close(); dest.unlink(missing_ok=True)
+                        return web.json_response({"error": "file too large (max 30 MB)"}, status=413)
+                    fh.write(chunk)
+            rel = f"uploads/{dest.name}"
+            saved.append({"name": dest.name, "path": rel, "size": size})
+            hub.emit(f"📎 received <code>{dest.name}</code> ({size // 1024 or 1} KB) → <code>{rel}</code>",
+                     kind="info")
+        if not saved:
+            return web.json_response({"error": "no file in request"}, status=400)
+        return web.json_response({"files": saved})
+
     async def ws_handler(req: web.Request):
         if not same_origin(req):
             return web.json_response({"error": "bad origin"}, status=403)
@@ -165,11 +203,12 @@ def make_app(token: str, db: "DB", hub: Hub, worker: "Worker", commands: "Comman
             sender.cancel()
         return ws
 
-    app = web.Application(middlewares=[guard], client_max_size=2 * 1024 * 1024)
+    app = web.Application(middlewares=[guard], client_max_size=32 * 1024 * 1024)
     app.add_routes([
         web.get("/", index), web.post("/login", login), web.get("/favicon.ico", favicon),
         web.get("/api/state", state), web.get("/api/events", events),
         web.get("/api/tasks/{id}", task_detail), web.post("/api/command", command),
+        web.post("/api/upload", upload),
         web.get("/ws", ws_handler),
     ])
     return app

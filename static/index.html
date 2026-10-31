@@ -359,6 +359,22 @@ dialog h3:first-child { margin-top: 0; }
   .toasts { left: 10px; right: 10px; bottom: 90px; align-items: stretch; }
   .toast { max-width: none; }
 }
+
+/* --- added: new-session, editable settings, attachments --- */
+.sb-new { width: calc(100% - 24px); margin: 2px 12px 10px; justify-content: center; gap: 6px; }
+.kv .iedit { width: 92px; padding: 4px 7px; font-size: 13px; border-radius: 7px;
+  border: 1px solid var(--border-2); background: var(--surface); color: var(--text); }
+.kv select.iedit { width: auto; }
+.kv .imut { color: var(--muted); font-size: 11px; margin-left: 6px; }
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 2px 8px; }
+.attachments:empty { display: none; }
+.attachments .chip { display: inline-flex; align-items: center; gap: 6px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 9px; padding: 4px 6px 4px 9px; font-size: 12.5px; max-width: 220px; }
+.attachments .chip b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachments .chip .rm { width: 20px; height: 20px; border-radius: 6px; padding: 0; color: var(--muted);
+  display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; }
+.attachments .chip .rm:hover { color: var(--err); background: var(--surface-3); }
+.composer .attach { align-self: flex-end; margin: 0 2px 2px 0; flex: none; }
 </style>
 </head>
 <body>
@@ -394,6 +410,7 @@ dialog h3:first-child { margin-top: 0; }
       </div>
     </div>
 
+    <button class="line sb-new" id="newSessionBtn" title="Stop everything and start a fresh session: clears the queue, goal and history">+ New session</button>
     <div class="sb-body scroll">
       <div class="sec">
         <div class="sec-h">Agents <span class="n" id="fleetCount"></span></div>
@@ -466,7 +483,10 @@ dialog h3:first-child { margin-top: 0; }
       <button class="jump" id="jump"><svg class="i"><use href="#i-down"/></svg>Latest <span class="badge" id="jumpBadge" hidden>0</span></button>
       <div class="inner">
         <div class="apdock scroll" id="apdock"></div>
+        <div class="attachments" id="attachments"></div>
         <form class="composer" id="form">
+          <button type="button" class="ic attach" id="attachBtn" title="Attach files or photos">📎</button>
+          <input type="file" id="fileInput" multiple hidden>
           <textarea id="input" rows="1" placeholder="Give the agent a task…" autocomplete="off"></textarea>
           <button class="solid send" type="submit" title="Send (Enter)" aria-label="Send"><svg class="i"><use href="#i-up"/></svg></button>
         </form>
@@ -721,6 +741,8 @@ function addEvent(ev) {
   const agent = ev.agent || "main";
   if (ev.kind === "agent") metaFor(agent, d.role);
 
+  if (ev.kind === "clear") { col.innerHTML = ""; openTurn = null; return; }
+
   if (ev.kind === "task") {                       // a task starts → a new turn
     if (d.state === "started") {
       const isGoal = d.task_kind === "goal";
@@ -878,9 +900,51 @@ const input = $("input");
 const grow = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 220) + "px"; };
 input.addEventListener("input", grow);
 input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("form").requestSubmit(); } });
+const pendingAtt = [];
+function renderAtt() {
+  const host = $("attachments"); host.innerHTML = "";
+  pendingAtt.forEach((a, i) => {
+    const chip = el("div", "chip", `<span>📎</span><b title="${esc(a.path)}">${esc(a.name)}</b>`);
+    const rm = el("button", "rm", "✕"); rm.type = "button";
+    rm.onclick = () => { pendingAtt.splice(i, 1); renderAtt(); };
+    chip.appendChild(rm); host.appendChild(chip);
+  });
+}
+async function uploadFiles(files) {
+  for (const f of files) {
+    const fd = new FormData(); fd.append("file", f, f.name || "pasted.png");
+    try {
+      const r = await fetch("/api/upload", { method: "POST", body: fd });
+      if (r.status === 401) return location.reload();
+      const j = await r.json();
+      if (j.files) j.files.forEach((x) => pendingAtt.push(x));
+      else if (j.error) replyMsg("⚠️ upload failed: " + esc(j.error));
+    } catch (e) { replyMsg("⚠️ upload failed."); }
+  }
+  renderAtt();
+}
+$("attachBtn").onclick = () => $("fileInput").click();
+$("fileInput").onchange = () => { if ($("fileInput").files.length) uploadFiles($("fileInput").files); $("fileInput").value = ""; };
+input.addEventListener("paste", (e) => {
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  const files = [];
+  for (const it of items) if (it.kind === "file") { const f = it.getAsFile(); if (f) files.push(f); }
+  if (files.length) { e.preventDefault(); uploadFiles(files); }
+});
+$("newSessionBtn").onclick = () => {
+  if (confirm("Start a new session? This stops all tasks and clears the goal and history.")) {
+    $("col").innerHTML = ""; send("/newproject");
+  }
+};
 $("form").onsubmit = (e) => {
   e.preventDefault();
-  const t = input.value; if (!t.trim()) return;
+  let t = input.value.trim();
+  if (!t && !pendingAtt.length) return;
+  if (pendingAtt.length) {
+    const paths = pendingAtt.map((a) => a.path).join(", ");
+    t = (t ? t + "\n\n" : "") + "[attached files available in WORKDIR: " + paths + "]";
+    pendingAtt.length = 0; renderAtt();
+  }
   mineMsg(t); send(t); input.value = ""; grow();
 };
 
@@ -953,11 +1017,37 @@ async function loadState() {
   syncApDock(j.pending_approvals);
   renderFleet(s.fleet || []);
 
-  $("info").innerHTML = `<div>Workdir</div><div><code>${esc(s.workdir)}</code></div>
-    <div>Access</div><div>${esc(s.access)} · approvals ${s.approvals ? "on" : "off"}</div>
-    <div>Max steps</div><div>${s.max_steps}</div><div>Goal every</div><div>${s.goal_interval_min} min</div>
-    <div>Helpers</div><div>max ${s.max_workers ?? "—"} · review ${s.review ? "on" : "off"}</div>
-    <div>Tokens in / out</div><div>${fmtTok(s.prompt_tokens)} / ${fmtTok(s.completion_tokens)}</div>`;
+  renderInfo(s);
+}
+
+function renderInfo(s) {
+  const host = $("info");
+  if (!host.dataset.built) {
+    host.dataset.built = "1";
+    host.innerHTML =
+      `<div>Workdir</div><div><code id="iWorkdir"></code></div>` +
+      `<div>Access</div><div id="iAccess"></div>` +
+      `<div>Max steps</div><div><input id="iMaxSteps" class="iedit" type="number" min="0"><span class="imut">0 = ∞</span></div>` +
+      `<div>Goal every</div><div><input id="iInterval" class="iedit" type="number" min="1"> min</div>` +
+      `<div>Max helpers</div><div><input id="iWorkers" class="iedit" type="number" min="0"></div>` +
+      `<div>Reasoning</div><div><select id="iReason" class="iedit"><option value="auto">auto</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="max">max</option><option value="off">off</option></select></div>` +
+      `<div>Review</div><div><button class="line" id="iReview" style="padding:4px 10px">—</button></div>` +
+      `<div>Tokens in / out</div><div id="iTok"></div>`;
+    $("iMaxSteps").onchange = () => send("/maxsteps " + ($("iMaxSteps").value.trim() || "0"));
+    $("iInterval").onchange = () => { const v = $("iInterval").value.trim(); if (v) send("/interval " + v); };
+    $("iWorkers").onchange  = () => send("/workers " + ($("iWorkers").value.trim() || "0"));
+    $("iReason").onchange   = () => send("/reasoning " + $("iReason").value);
+    $("iReview").onclick    = () => send("/review " + ($("iReview").dataset.on === "1" ? "off" : "on"));
+  }
+  const af = document.activeElement;
+  $("iWorkdir").textContent = s.workdir || "";
+  $("iAccess").textContent = `${s.access} · approvals ${s.approvals ? "on" : "off"}`;
+  if (af !== $("iMaxSteps")) $("iMaxSteps").value = s.max_steps || 0;
+  if (af !== $("iInterval")) $("iInterval").value = s.goal_interval_min;
+  if (af !== $("iWorkers"))  $("iWorkers").value = s.max_workers ?? "";
+  if (af !== $("iReason") && s.reasoning) $("iReason").value = s.reasoning;
+  $("iReview").textContent = s.review ? "on" : "off"; $("iReview").dataset.on = s.review ? "1" : "0";
+  $("iTok").textContent = `${fmtTok(s.prompt_tokens)} / ${fmtTok(s.completion_tokens)}`;
 }
 
 const ROLE_ICON = { main: "🧠", worker: "🤖", reviewer: "🔎" };
