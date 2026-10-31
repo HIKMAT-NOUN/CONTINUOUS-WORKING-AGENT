@@ -304,6 +304,10 @@ class Worker:
             "approvals": self.cfg.approvals,
             "max_workers": self.cfg.max_workers,
             "review": self.cfg.review,
+            "recent": self.db.recent_tasks(12),
+            "pending_approvals": [{"aid": a, "command": p["command"], "reason": p["reason"],
+                                   "agent": p.get("agent", "main")}
+                                  for a, p in self.approvals.pending.items()],
         }
 
     def status_html(self) -> str:
