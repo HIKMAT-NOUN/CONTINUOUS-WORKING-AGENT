@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Agent</title>
+<style>
+:root { --bg:#0e1015; --panel:#161920; --panel2:#1c2029; --border:#2a2f3b; --text:#e6e8ee;
+  --muted:#8b93a5; --accent:#3b82f6; --ok:#4ade80; --err:#f87171; --warn:#fbbf24; --code:#0f1218; }
+* { box-sizing:border-box; }
+html,body { height:100%; margin:0; }
+body { background:var(--bg); color:var(--text); font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+code,pre { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; }
+code { background:var(--code); padding:1px 5px; border-radius:4px; word-break:break-all; }
+button { font:inherit; cursor:pointer; border-radius:7px; border:1px solid var(--border); background:var(--panel); color:var(--text); padding:7px 13px; }
+button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+button:disabled { opacity:.5; cursor:default; }
+input,textarea { font:inherit; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:9px 11px; width:100%; }
+
+/* gate */
+#gate { display:grid; place-items:center; height:100vh; padding:16px; }
+#gate .box { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:26px; width:min(400px,92vw); }
+#gate h1 { font-size:19px; margin:0 0 4px; }
+#gate p { color:var(--muted); font-size:13px; margin:0 0 16px; }
+#gate input { margin-bottom:12px; }
+#gate .err { color:var(--err); font-size:13px; min-height:18px; }
+
+/* app */
+.app { display:none; grid-template-rows:auto auto 1fr auto; height:100vh; }
+header { display:flex; align-items:center; gap:10px; padding:11px 14px; background:var(--panel); border-bottom:1px solid var(--border); flex-wrap:wrap; }
+header h1 { font-size:16px; margin:0; font-weight:650; }
+.dot { width:9px; height:9px; border-radius:50%; background:var(--muted); }
+.dot.ok { background:var(--ok); animation:pulse 1.4s infinite; } .dot.off { background:var(--err); } .dot.warn { background:var(--warn); }
+@keyframes pulse { 50% { opacity:.4; } }
+.sp { flex:1; }
+.pill { color:var(--muted); font-size:12px; }
+.agents { display:flex; gap:8px; overflow-x:auto; padding:10px 14px; background:var(--panel); border-bottom:1px solid var(--border); }
+.agents:empty { display:none; }
+.anode { min-width:170px; border:1px solid var(--border); border-left:3px solid var(--ac,#3b82f6); border-radius:10px; background:var(--panel2); padding:8px 10px; }
+.anode .top { display:flex; align-items:center; gap:6px; }
+.anode .nm { font-weight:600; font-size:12.5px; } .anode .rl { color:var(--ac,#3b82f6); font-size:10px; text-transform:uppercase; }
+.anode .tag { margin-left:auto; color:var(--muted); font-size:10px; }
+.anode .ttl,.anode .act,.anode .th { font-size:11.5px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.anode .ttl { color:var(--muted); } .anode .th { color:var(--muted); font-style:italic; }
+.sdot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+.sdot.working { background:var(--ac,#3b82f6); animation:pulse 1.4s infinite; } .sdot.done { background:var(--ok); } .sdot.failed,.sdot.aborted { background:var(--err); }
+.feed { overflow:auto; padding:10px 14px; }
+.ev { padding:4px 0; display:grid; grid-template-columns:54px 1fr; gap:8px; }
+.ev .ts { color:var(--muted); font-size:11.5px; font-variant-numeric:tabular-nums; }
+.ev .body { white-space:pre-wrap; word-break:break-word; }
+.ev .chip { display:inline-block; font-size:10px; padding:0 6px; border-radius:999px; color:#fff; margin-right:6px; }
+.ev.mine .body { color:var(--accent); }
+.ev.task .body,.ev.final .body { font-weight:500; }
+.ev.thinking .body { color:var(--muted); font-style:italic; }
+.ev.final .body,.ev.review .body { background:var(--panel); border:1px solid var(--border); border-radius:9px; padding:9px 11px; }
+.ev.alert .body { color:var(--warn); }
+.ev.step .body { font-family:ui-monospace,monospace; font-size:12.5px; }
+.composer { display:flex; gap:8px; padding:10px 14px; background:var(--panel); border-top:1px solid var(--border); }
+.composer textarea { resize:none; min-height:42px; max-height:160px; }
+.banner { background:var(--panel2); color:var(--warn); font-size:12.5px; padding:5px 14px; }
+.banner:empty { display:none; }
+</style>
+</head>
+<body>
+<div id="gate">
+  <div class="box">
+    <h1>🤖 My Agent</h1>
+    <p>Enter your access token to connect. (The relay address is this page's own URL.)</p>
+    <input id="tok" type="password" placeholder="User token" autocomplete="off">
+    <button class="primary" id="go" style="width:100%">Connect</button>
+    <div class="err" id="gateErr"></div>
+  </div>
+</div>
+
+<div class="app" id="app">
+  <header>
+    <h1>🤖 My Agent</h1>
+    <span class="dot" id="dot"></span><span class="pill" id="st">connecting…</span>
+    <span class="sp"></span>
+    <span class="pill" id="tok2"></span>
+    <button id="logout">Sign out</button>
+  </header>
+  <div class="banner" id="banner"></div>
+  <div class="agents" id="agents"></div>
+  <div class="feed" id="feed"></div>
+  <div class="composer">
+    <textarea id="input" rows="1" placeholder="Describe a task… or /command"></textarea>
+    <button class="primary" id="send">Send</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const KEY = "myagent_token";
+let ws = null, token = "", lastId = 0, backoff = 1000, feedCount = 0;
+
+// ---- small helpers ----
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+function htmlToText(h) { return String(h).replace(/<[^>]+>/g,"").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&amp;/g,"&").replace(/&quot;/g,'"').replace(/&#x27;/g,"'").replace(/&#39;/g,"'"); }
+const fmtTime = (ts) => new Date((ts||Date.now()/1000)*1000).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
+const fmtTok = (n) => n>=1e6 ? (n/1e6).toFixed(2)+"M" : n>=1e3 ? (n/1e3).toFixed(1)+"k" : String(n||0);
+const PALETTE = ["#22c55e","#a855f7","#14b8a6","#ec4899","#f59e0b","#06b6d4","#ef4444","#84cc16"];
+const meta = {}; let cursor = 0;
+function colorFor(a) { if (a==="main") return "#3b82f6"; if (!meta[a]) meta[a]=PALETTE[cursor++%PALETTE.length]; return meta[a]; }
+const roleIcon = (r) => ({main:"🧠",reviewer:"🔎"}[r] || "🤖");
+
+// ---- feed ----
+const feed = $("feed");
+function nearBottom() { return feed.scrollHeight-feed.scrollTop-feed.clientHeight < 80; }
+function addRow(kind, ts, text, agent, mine) {
+  const stick = nearBottom();
+  const row = document.createElement("div");
+  row.className = "ev " + kind + (mine?" mine":"");
+  const t = document.createElement("div"); t.className="ts"; t.textContent=fmtTime(ts);
+  const b = document.createElement("div"); b.className="body";
+  if (agent && agent!=="main" && !mine) {
+    const chip=document.createElement("span"); chip.className="chip"; chip.style.background=colorFor(agent); chip.textContent=agent;
+    b.appendChild(chip);
+  }
+  b.appendChild(document.createTextNode(text));
+  row.append(t,b); feed.appendChild(row);
+  while (feed.children.length>1200) feed.removeChild(feed.firstChild);
+  if (stick) feed.scrollTop = feed.scrollHeight;
+}
+function addEvent(ev) {
+  if (ev.id && ev.id<=lastId) return;
+  if (ev.id) lastId = Math.max(lastId, ev.id);
+  if (ev.kind==="output") return;
+  const text = htmlToText(ev.html||"").trim();
+  if (!text) return;
+  addRow(ev.kind, ev.ts, text, ev.agent||"main", false);
+}
+
+// ---- agents panel ----
+function renderAgents(fleet) {
+  const host = $("agents"); host.innerHTML="";
+  (fleet||[]).forEach(a => {
+    const c = colorFor(a.id);
+    const n = document.createElement("div");
+    n.className="anode"; n.style.setProperty("--ac", c);
+    const step = a.status==="working" ? `${a.step}/${a.max_steps}` : a.status;
+    const sub = a.status==="working" ? (htmlToText(a.action||"")||"working…") : (a.role==="main"?"idle":a.status);
+    n.innerHTML = `<div class="top"><span class="sdot ${esc(a.status)}"></span>`+
+      `<span class="nm">${roleIcon(a.role)} ${esc(a.id)}</span>`+
+      `<span class="rl">${esc(a.role)}</span><span class="tag">${esc(step)}</span></div>`+
+      (a.title?`<div class="ttl">${esc(a.title)}</div>`:"")+
+      `<div class="act">${esc(sub)}</div>`+
+      (a.status==="working"&&a.thinking?`<div class="th">🧠 ${esc(a.thinking)}</div>`:"");
+    host.appendChild(n);
+  });
+}
+function renderState(s) {
+  if (!s) return;
+  const working = s.state==="working";
+  $("dot").className = "dot " + (s.state==="paused"?"warn":working?"ok":"");
+  $("st").textContent = s.state + (s.current?` · ${(s.current.description||"").slice(0,40)}`:"");
+  $("tok2").textContent = `${fmtTok(s.tokens_today)}/${fmtTok(s.budget)} · ${s.model||""}`;
+  renderAgents(s.fleet);
+}
+
+// ---- connection ----
+function setConn(ok, msg) {
+  if (!ok) { $("dot").className="dot off"; $("st").textContent="offline"; }
+  $("banner").textContent = msg || "";
+}
+function connect() {
+  const proto = location.protocol==="https:" ? "wss" : "ws";
+  const url = `${proto}://${location.host}/ws/app?after=${lastId}&token=${encodeURIComponent(token)}`;
+  ws = new WebSocket(url);
+  ws.onopen = () => { backoff=1000; setConn(true,""); };
+  ws.onclose = (e) => {
+    setConn(false, "reconnecting…");
+    if (e.code===1008 || e.code===4401) { gateError("Token rejected (401). Check the token."); return; }
+    setTimeout(connect, backoff); backoff=Math.min(backoff*2,15000);
+  };
+  ws.onerror = () => {};
+  ws.onmessage = (m) => {
+    const d = JSON.parse(m.data);
+    if (d.type==="hello") { (d.events||[]).forEach(addEvent); renderState(d.state); setConn(true,""); }
+    else if (d.type==="event") addEvent(d.event);
+    else if (d.type==="state") renderState(d.state);
+    else if (d.type==="reply" && d.html) addRow("reply", Date.now()/1000, htmlToText(d.html), "main", false);
+    else if (d.type==="presence") $("dot").className = "dot " + (d.agent_online?"ok":"warn");
+  };
+}
+// the relay returns HTTP 401 before upgrade on a bad token; detect via a quick probe
+async function probeAndConnect() {
+  try {
+    const r = await fetch("/check?token=" + encodeURIComponent(token));
+    if (r.status === 401) { gateError("Token rejected. Check that you pasted the user token exactly."); return; }
+  } catch (e) { /* network hiccup — let the WebSocket retry below */ }
+  connect();
+}
+
+function send(text) {
+  text = text.trim(); if (!text) return;
+  addRow("reply", Date.now()/1000, "› "+text, "you", true);
+  if (ws && ws.readyState===1) ws.send(JSON.stringify({type:"command", text, ref:String(Date.now())}));
+}
+
+// ---- gate ----
+function gateError(msg) { $("gateErr").textContent = msg; $("gate").style.display="grid"; $("app").style.display="none"; }
+function openApp() {
+  $("gate").style.display="none"; $("app").style.display="grid";
+  $("tok").value="";
+  probeAndConnect();
+}
+$("go").onclick = () => {
+  const t = $("tok").value.trim();
+  if (!t) { $("gateErr").textContent="Enter the token."; return; }
+  token = t; try { localStorage.setItem(KEY, t); } catch(e){}
+  lastId=0; feed.innerHTML=""; openApp();
+};
+$("tok").addEventListener("keydown", e => { if (e.key==="Enter") $("go").click(); });
+$("logout").onclick = () => { try { localStorage.removeItem(KEY); } catch(e){} if (ws) { ws.onclose=null; ws.close(); } location.reload(); };
+
+// composer
+const input = $("input");
+input.addEventListener("input", () => { input.style.height="auto"; input.style.height=Math.min(input.scrollHeight,160)+"px"; });
+input.addEventListener("keydown", e => { if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); send(input.value); input.value=""; input.style.height="auto"; } });
+$("send").onclick = () => { send(input.value); input.value=""; input.style.height="auto"; };
+
+// autostart if we have a saved token
+try { const saved = localStorage.getItem(KEY); if (saved) { token=saved; openApp(); } } catch(e){}
+</script>
+</body>
+</html>

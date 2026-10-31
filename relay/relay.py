@@ -96,6 +96,12 @@ def make_app() -> web.Application:
         return web.json_response({"ok": True, "agent_online": hub.agent_online(),
                                   "apps": len(hub.apps), "buffered": len(hub.events)})
 
+    async def check(req: web.Request):
+        # lets the browser client validate the user token before opening a WebSocket
+        if not ok(bearer(req), user_token):
+            return web.json_response({"ok": False}, status=401)
+        return web.json_response({"ok": True, "agent_online": hub.agent_online()})
+
     async def agent_ws(req: web.Request):
         if not ok(bearer(req), agent_key):
             return web.json_response({"error": "unauthorized"}, status=401)
@@ -161,9 +167,18 @@ def make_app() -> web.Application:
             log.info("app disconnected (%d left)", len(hub.apps))
         return ws
 
+    webapp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp", "index.html")
+
+    async def index(req: web.Request):
+        if os.path.isfile(webapp):
+            return web.FileResponse(webapp, headers={"Cache-Control": "no-store"})
+        return web.Response(text="relay is running", content_type="text/plain")
+
     app = web.Application()
     app.add_routes([
+        web.get("/", index),
         web.get("/healthz", health),
+        web.get("/check", check),
         web.get("/ws/agent", agent_ws),
         web.get("/ws/app", app_ws),
     ])

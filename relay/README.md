@@ -71,6 +71,12 @@ RELAY_AGENT_KEY=...     # same as the relay's RELAY_AGENT_KEY
 ```
 Restart the agent. `GET /healthz` on the relay should then show `"agent_online": true`.
 
+## Open it in a browser (laptop / desktop)
+The relay also serves a web dashboard. Once the relay is running, open its address in any
+browser — `https://your-relay.example/` — and paste your `RELAY_USER_TOKEN`. You get the
+same live feed and agent tree as the phone app, from anywhere, no install. The token is
+remembered in that browser (use "Sign out" to clear it).
+
 ## Protocol (for the app)
 Connect to `wss://your-relay.example/ws/app?after=0` with header
 `Authorization: Bearer <RELAY_USER_TOKEN>` (or `?token=<RELAY_USER_TOKEN>`).
