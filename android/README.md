@@ -17,10 +17,16 @@ What it does:
   task, its path is added to the text as `[attached files in WORKDIR: uploads/x.png]`.
   Limit: **11 MB per file**. The relay protocol sends a file as one base64 message, and the
   app's WebSocket library (OkHttp) can't send a single message over 16 MB.
-- **⚙ Settings**, filled in from the agent's live state: max steps (0 = unlimited), goal
-  interval, max helpers, reasoning depth, auto review, plus recent tasks, *Clear activity
-  feed* (`/clear`), and disconnect. A number field is sent when you press Done or leave it,
-  and is never overwritten while you're typing in it.
+- **⚙ Settings tab**: tap *Settings* in the tab bar under the header, or the ⚙ button. It's
+  the same panel as the web console's Settings dialog:
+  - **Agent settings**, filled in from the agent's live state: max steps (0 = unlimited),
+    goal interval, max helpers, reasoning depth, review on/off. A number field is sent when
+    you press Done or leave it, and is never overwritten while you're typing in it.
+  - **Conversation**: show raw tool output, colour by agent (saved on the phone).
+  - **Telegram / CLI verbosity** (`/verbose`) and **Post the step log** (`/log`).
+  - **Session**: New session, Stop all, Clear activity feed.
+  - **Agent info** (workdir, access, model, tokens in/out, today's usage), **recent tasks**,
+    and **Disconnect**.
 
 ## What you need first
 1. A **relay** running on a public host with TLS, from `../relay/` (its README has the
@@ -50,7 +56,10 @@ From the command line instead (Android SDK installed, `ANDROID_HOME` set, or `sd
 cd android && ./gradlew assembleDebug
 ```
 The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. `./gradlew testDebugUnitTest`
-runs the unit tests (they parse real state and event messages captured from the agent).
+runs the unit tests: they parse real state and event messages captured from the agent, and
+render the screens to PNGs with Paparazzi, so no emulator is needed. Reference images are in
+`app/src/test/snapshots/images/`. `./gradlew verifyPaparazziDebug` checks the screens still
+match them, and `./gradlew recordPaparazziDebug` updates them after a deliberate UI change.
 
 ## Use it
 On first launch, enter:

@@ -2,6 +2,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("app.cash.paparazzi") version "1.3.5"   // renders Compose screens to PNGs in unit tests (no emulator)
 }
 
 android {

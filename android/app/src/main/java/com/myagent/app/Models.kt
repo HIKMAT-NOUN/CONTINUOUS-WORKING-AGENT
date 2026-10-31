@@ -37,6 +37,13 @@ data class Status(
     val goalIntervalMin: Double,
     val recent: List<RecentTask>,
     val pendingApprovals: List<Approval>,
+    // read-only info (same as the web console's Settings → Agent)
+    val verbose: String = "steps",
+    val workdir: String = "",
+    val access: String = "",
+    val approvalsOn: Boolean = true,
+    val promptTokens: Long = 0,
+    val completionTokens: Long = 0,
 )
 
 /** A user-defined button: tapping it sends [command]. */
@@ -53,6 +60,7 @@ data class Attachment(val ref: String, val name: String, val size: Long,
 }
 
 val REASONING_LEVELS = listOf("auto", "low", "medium", "high", "max", "off")
+val VERBOSITY_LEVELS = listOf("off", "steps", "full")
 
 /** Largest file the app will send. The relay accepts more, but OkHttp refuses (and drops the
  *  connection on) any single WebSocket message over 16 MiB, and base64 adds a third. */
@@ -107,15 +115,26 @@ fun parseStatus(s: JSONObject): Status {
                 it.optString("status"), it.optInt("steps"), it.optLong("tokens"))
         },
         pendingApprovals = s.optJSONArray("pending_approvals").mapObjects(::parseApproval),
+        verbose = s.str("verbose").ifEmpty { "steps" },
+        workdir = s.str("workdir"),
+        access = s.str("access"),
+        approvalsOn = s.optBoolean("approvals", true),
+        promptTokens = s.optLong("prompt_tokens"),
+        completionTokens = s.optLong("completion_tokens"),
     )
 }
 
 fun eventToFeed(ev: JSONObject): FeedItem? {
     val kind = ev.optString("kind")
-    if (kind == "output" || kind == "approval") return null   // output: keep it light; approvals get a card
+    if (kind == "approval") return null                       // approvals get a card instead
+    val data = ev.optJSONObject("data")
+    if (kind == "output") {                                   // raw tool output: shown only if enabled in Settings
+        val out = data?.optString("output").orEmpty().ifEmpty { htmlToText(ev.optString("html")) }
+        if (out.isBlank()) return null
+        return FeedItem(ev.optLong("id"), ev.optDouble("ts"), kind, ev.optString("agent", "main"), out.take(4000))
+    }
     val text = htmlToText(ev.optString("html"))
     if (text.isEmpty()) return null
-    val data = ev.optJSONObject("data")
     val ok = if (kind == "result" && data != null && data.has("ok")) data.optBoolean("ok") && !data.optBoolean("denied") else null
     return FeedItem(ev.optLong("id"), ev.optDouble("ts"), kind, ev.optString("agent", "main"), text, ok)
 }

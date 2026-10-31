@@ -153,18 +153,89 @@ fun AgentScreen(vm: AgentViewModel) {
     val approvals by vm.approvals.collectAsState()
     val busyAids by vm.busyAids.collectAsState()
     val quick by vm.quick.collectAsState()
-    var showSettings by rememberSaveable { mutableStateOf(false) }
+    val showOutput by vm.showOutput.collectAsState()
+    val tint by vm.tintAgents.collectAsState()
+    var tab by rememberSaveable { mutableStateOf(0) }            // 0 = Activity, 1 = Settings
     var editQuick by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf<String?>(null) }   // "new" | "stopall" | "clear"
     val listState = rememberLazyListState()
-    LaunchedEffect(feed.size) { if (feed.isNotEmpty()) listState.animateScrollToItem(feed.size - 1) }
+    val shown = if (showOutput) feed else feed.filter { it.kind != "output" }
+    LaunchedEffect(shown.size, tab) { if (tab == 0 && shown.isNotEmpty()) listState.animateScrollToItem(shown.size - 1) }
+    if (tab == 1) BackHandler { tab = 0 }
 
-    if (showSettings) {
-        BackHandler { showSettings = false }
-        SettingsScreen(vm, onClose = { showSettings = false }, onConfirm = { confirm = it })
-    } else Column(Modifier.fillMaxSize().imePadding()) {
+    Column(Modifier.fillMaxSize().imePadding()) {
+        TopBar(connected, agentOnline, status, tab) { tab = it }
+        if (banner.isNotEmpty())
+            Text(banner, color = WarnC, fontSize = 12.sp,
+                modifier = Modifier.fillMaxWidth().background(Panel2).padding(14.dp, 5.dp))
+
+        if (tab == 1) {
+            val url by vm.url.collectAsState()
+            val focus = LocalFocusManager.current
+            SettingsContent(status, url, showOutput, tint, SettingsActions(
+                onMaxSteps = vm::setMaxSteps, onInterval = vm::setInterval, onWorkers = vm::setWorkers,
+                onReasoning = { focus.clearFocus(); vm.setReasoning(it) },
+                onReview = { focus.clearFocus(); vm.setReview(it) },
+                onVerbose = { vm.setVerbose(it) },
+                onLog = { vm.postLog(); tab = 0 },
+                onShowOutput = vm::setShowOutput, onTint = vm::setTintAgents,
+                onConfirm = { confirm = it }, onLogout = vm::logout),
+                modifier = Modifier.weight(1f))
+        } else {
+        NowCard(status, onNew = { confirm = "new" }, onStopAll = { confirm = "stopall" })
+        QuickBar(quick, onTap = { vm.send(it.command) }, onEdit = { editQuick = true })
+
+        status?.fleet?.takeIf { it.size > 1 || it.any { a -> a.status == "working" } }?.let { fleet ->
+            LazyRow(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentPadding = PaddingValues(horizontal = 12.dp)) {
+                items(fleet, key = { it.id }) { a -> AgentChip(a) }
+            }
+        }
+
+        // feed
+        LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+            if (shown.isEmpty()) item {
+                Text("Nothing here yet. Send a task below and watch every step live.",
+                    color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 40.dp).fillMaxWidth())
+            }
+            items(shown, key = { it.id }) { item -> FeedRow(item, tint) }
+        }
+
+        // approvals (pinned so they can't be missed)
+        if (approvals.isNotEmpty())
+            Column(Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState())
+                .padding(horizontal = 10.dp)) {
+                approvals.forEach { a -> ApprovalCard(a, busy = a.aid in busyAids, onAnswer = { yes -> vm.approve(a, yes) }) }
+            }
+
+        Composer(vm)
+        }
+    }
+
+    if (editQuick) QuickEditor(quick, onDismiss = { editQuick = false }, onSave = { vm.saveQuick(it); editQuick = false })
+
+    confirm?.let { what ->
+        val (title, body, action) = when (what) {
+            "new" -> Triple("Start a new session?", "Stops all tasks, clears the queue, the standing goal and the history.", "New session")
+            "stopall" -> Triple("Stop everything?", "Aborts the current task and clears the whole queue.", "Stop all")
+            else -> Triple("Clear the activity feed?", "Removes the activity history for every device. Tasks keep running.", "Clear")
+        }
+        AlertDialog(onDismissRequest = { confirm = null }, containerColor = Panel,
+            title = { Text(title, color = TextMain) }, text = { Text(body, color = Text2) },
+            confirmButton = { TextButton(onClick = {
+                when (what) { "new" -> vm.newSession(); "stopall" -> vm.stopAll(); else -> vm.clearFeed() }
+                confirm = null; tab = 0
+            }) { Text(action, color = ErrC) } },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel", color = Text2) } })
+    }
+}
+
+/** Header (status) + the Activity | Settings tab bar. */
+@Composable
+fun TopBar(connected: Boolean, agentOnline: Boolean, status: Status?, tab: Int, onTab: (Int) -> Unit) {
+    Column {
         // header
-        Row(Modifier.fillMaxWidth().background(Panel).statusBarsPadding().padding(14.dp, 10.dp),
+        Row(Modifier.fillMaxWidth().background(Panel).statusBarsPadding().padding(14.dp, 10.dp, 6.dp, 6.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(28.dp).clip(RoundedCornerShape(9.dp)).background(Accent), contentAlignment = Alignment.Center) {
                 Text("✳", color = AccentInk, fontSize = 15.sp, fontWeight = FontWeight.Bold)
@@ -187,56 +258,23 @@ fun AgentScreen(vm: AgentViewModel) {
                     status?.let { Text("  ·  ${fmtTok(it.tokens)}/${fmtTok(it.budget)}", color = Muted, fontSize = 12.sp) }
                 }
             }
-            TextButton(onClick = { showSettings = true }) { Text("⚙ Settings", color = Text2, fontSize = 13.sp) }
-        }
-        if (banner.isNotEmpty())
-            Text(banner, color = WarnC, fontSize = 12.sp,
-                modifier = Modifier.fillMaxWidth().background(Panel2).padding(14.dp, 5.dp))
-
-        NowCard(status, onNew = { confirm = "new" }, onStopAll = { confirm = "stopall" })
-        QuickBar(quick, onTap = { vm.send(it.command) }, onEdit = { editQuick = true })
-
-        status?.fleet?.takeIf { it.size > 1 || it.any { a -> a.status == "working" } }?.let { fleet ->
-            LazyRow(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentPadding = PaddingValues(horizontal = 12.dp)) {
-                items(fleet, key = { it.id }) { a -> AgentChip(a) }
+            Box(Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(if (tab == 1) AccentSoft else Color.Transparent)
+                .clickable { onTab(if (tab == 1) 0 else 1) }, contentAlignment = Alignment.Center) {
+                Text("⚙", color = if (tab == 1) Accent else Text2, fontSize = 20.sp)
             }
         }
-
-        // feed
-        LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-            if (feed.isEmpty()) item {
-                Text("Nothing here yet. Send a task below and watch every step live.",
-                    color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 40.dp).fillMaxWidth())
+        // Activity | Settings tabs
+        Row(Modifier.fillMaxWidth().background(Panel)) {
+            listOf("💬  Activity", "⚙  Settings").forEachIndexed { i, label ->
+                Column(Modifier.weight(1f).clickable { onTab(i) }, horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(label, color = if (tab == i) TextMain else Muted, fontSize = 14.sp,
+                        fontWeight = if (tab == i) FontWeight.SemiBold else FontWeight.Normal,
+                        modifier = Modifier.padding(vertical = 10.dp))
+                    Box(Modifier.fillMaxWidth(.5f).height(2.dp).background(if (tab == i) Accent else Color.Transparent))
+                }
             }
-            items(feed, key = { it.id }) { item -> FeedRow(item) }
         }
-
-        // approvals (pinned so they can't be missed)
-        if (approvals.isNotEmpty())
-            Column(Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState())
-                .padding(horizontal = 10.dp)) {
-                approvals.forEach { a -> ApprovalCard(a, busy = a.aid in busyAids, onAnswer = { yes -> vm.approve(a, yes) }) }
-            }
-
-        Composer(vm)
-    }
-
-    if (editQuick) QuickEditor(quick, onDismiss = { editQuick = false }, onSave = { vm.saveQuick(it); editQuick = false })
-
-    confirm?.let { what ->
-        val (title, body, action) = when (what) {
-            "new" -> Triple("Start a new session?", "Stops all tasks, clears the queue, the standing goal and the history.", "New session")
-            "stopall" -> Triple("Stop everything?", "Aborts the current task and clears the whole queue.", "Stop all")
-            else -> Triple("Clear the activity feed?", "Removes the activity history for every device. Tasks keep running.", "Clear")
-        }
-        AlertDialog(onDismissRequest = { confirm = null }, containerColor = Panel,
-            title = { Text(title, color = TextMain) }, text = { Text(body, color = Text2) },
-            confirmButton = { TextButton(onClick = {
-                when (what) { "new" -> vm.newSession(); "stopall" -> vm.stopAll(); else -> vm.clearFeed() }
-                confirm = null; showSettings = false
-            }) { Text(action, color = ErrC) } },
-            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel", color = Text2) } })
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
     }
 }
 
@@ -460,9 +498,9 @@ fun AgentChip(a: AgentNode) {
 }
 
 @Composable
-fun FeedRow(item: FeedItem) {
+fun FeedRow(item: FeedItem, tint: Boolean = true) {
     val agentTag: @Composable () -> Unit = {
-        if (item.agent != "main" && item.agent != "you")
+        if (tint && item.agent != "main" && item.agent != "you")
             Text(item.agent, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 2.dp).clip(RoundedCornerShape(50)).background(colorFor(item.agent)).padding(6.dp, 1.dp))
     }
@@ -477,7 +515,7 @@ fun FeedRow(item: FeedItem) {
             Text("TASK", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Bold)
             Text(item.text, color = TextMain, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
-        "final", "review" -> Row(Modifier.fillMaxWidth().padding(vertical = 6.dp).clip(RoundedCornerShape(12.dp)).background(Panel)) {
+        "final", "review" -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(vertical = 6.dp).clip(RoundedCornerShape(12.dp)).background(Panel)) {
             Box(Modifier.width(3.dp).fillMaxHeight().background(if (item.kind == "review") Violet
                 else if (item.text.contains("done")) OkC else ErrC))
             Text(item.text, color = TextMain, fontSize = 14.sp, modifier = Modifier.padding(12.dp, 10.dp))
@@ -492,8 +530,19 @@ fun FeedRow(item: FeedItem) {
             Text(item.text, color = TextMain, fontSize = 13.5.sp,
                 modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(AccentSoft).padding(10.dp, 7.dp))
         }
-        else -> Row(Modifier.fillMaxWidth().padding(start = 10.dp)) {   // the step-by-step timeline
-            val rail = if (item.agent == "main") Border else colorFor(item.agent).copy(alpha = .6f)
+        "output" -> {   // raw tool output (Settings → Show raw tool output); tap to expand
+            var open by remember { mutableStateOf(false) }
+            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(start = 10.dp)) {
+                Box(Modifier.width(2.dp).heightIn(min = 22.dp).fillMaxHeight().background(Border))
+                Text(item.text, color = Text2, fontSize = 11.5.sp, fontFamily = FontFamily.Monospace,
+                    maxLines = if (open) Int.MAX_VALUE else 4, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 10.dp, top = 2.dp, bottom = 4.dp).fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp)).background(Bg).border(1.dp, Border, RoundedCornerShape(8.dp))
+                        .clickable { open = !open }.padding(8.dp))
+            }
+        }
+        else -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(start = 10.dp)) {   // the step-by-step timeline
+            val rail = if (item.agent == "main" || !tint) Border else colorFor(item.agent).copy(alpha = .6f)
             Box(Modifier.width(2.dp).heightIn(min = 22.dp).fillMaxHeight().background(rail))
             Column(Modifier.padding(start = 10.dp, top = 2.dp, bottom = 2.dp)) {
                 agentTag()
@@ -508,68 +557,127 @@ fun FeedRow(item: FeedItem) {
 }
 
 // ---------- settings ----------
+/** Everything the Settings tab can do; keeps [SettingsContent] free of the view model so it can be previewed/tested. */
+data class SettingsActions(
+    val onMaxSteps: (Int) -> Unit = {}, val onInterval: (String) -> Unit = {}, val onWorkers: (Int) -> Unit = {},
+    val onReasoning: (String) -> Unit = {}, val onReview: (Boolean) -> Unit = {}, val onVerbose: (String) -> Unit = {},
+    val onLog: () -> Unit = {}, val onShowOutput: (Boolean) -> Unit = {}, val onTint: (Boolean) -> Unit = {},
+    val onConfirm: (String) -> Unit = {}, val onLogout: () -> Unit = {},
+)
+
+/** The Settings tab — the same panel as the web console's Settings dialog. */
 @Composable
-fun SettingsScreen(vm: AgentViewModel, onClose: () -> Unit, onConfirm: (String) -> Unit) {
-    val s by vm.status.collectAsState()
-    val url by vm.url.collectAsState()
-    val focus = LocalFocusManager.current
-    Column(Modifier.fillMaxSize().imePadding()) {
-        Row(Modifier.fillMaxWidth().background(Panel).statusBarsPadding().padding(6.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onClose) { Text("‹ Back", color = Text2) }
-            Text("Settings", color = TextMain, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+fun SettingsContent(st: Status?, url: String, showOutput: Boolean, tint: Boolean, act: SettingsActions,
+                    modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp, 0.dp, 16.dp, 24.dp).navigationBarsPadding()) {
+        if (st == null) Text("Not connected to the agent yet — values show once it reports in. You can still change them.",
+            color = WarnC, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp))
+
+        Section("Agent settings")
+        SetCard {
+            SettingField("Max steps", st?.maxSteps?.toString() ?: "", "Tool calls per task · 0 = unlimited (∞)", decimal = false,
+                valid = { it.toIntOrNull()?.let { n -> n >= 0 } == true }) { act.onMaxSteps(it.toInt()) }
+            SettingField("Goal every (minutes)", st?.let { fmtNum(it.goalIntervalMin) } ?: "", "Minutes between standing-goal cycles", decimal = true,
+                valid = { it.toDoubleOrNull()?.let { d -> d > 0 } == true }) { act.onInterval(it) }
+            SettingField("Max helpers", st?.maxWorkers?.toString() ?: "", "Parallel helper agents · 0 = none", decimal = false,
+                valid = { it.toIntOrNull()?.let { n -> n >= 0 } == true }) { act.onWorkers(it.toInt()) }
+            ReasoningPicker(st?.reasoning ?: "—", act.onReasoning)
+            SetDivider()
+            ToggleRow("Review", "A reviewer agent checks each finished task", st?.review ?: false, act.onReview)
         }
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp).navigationBarsPadding()) {
-            Section("Agent")
-            val st = s
-            if (st == null) Text("Waiting for the agent's settings…", color = Muted, fontSize = 13.sp)
-            else {
-                SettingField("Max steps", st.maxSteps.toString(), "Tool calls per task · 0 = unlimited", decimal = false,
-                    valid = { it.toIntOrNull()?.let { n -> n >= 0 } == true }) { vm.setMaxSteps(it.toInt()) }
-                SettingField("Goal interval", fmtNum(st.goalIntervalMin), "Minutes between standing-goal cycles", decimal = true,
-                    valid = { it.toDoubleOrNull()?.let { d -> d > 0 } == true }) { vm.setInterval(it) }
-                SettingField("Max helpers", st.maxWorkers.toString(), "Parallel helper agents · 0 = none", decimal = false,
-                    valid = { it.toIntOrNull()?.let { n -> n >= 0 } == true }) { vm.setWorkers(it.toInt()) }
-                ReasoningPicker(st.reasoning) { focus.clearFocus(); vm.setReasoning(it) }
-                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Auto review", color = TextMain, fontSize = 14.sp)
-                        Text("A reviewer agent checks each finished task", color = Muted, fontSize = 12.sp)
-                    }
-                    Switch(checked = st.review, onCheckedChange = { focus.clearFocus(); vm.setReview(it) },
-                        colors = SwitchDefaults.colors(checkedTrackColor = Accent, checkedThumbColor = AccentInk))
-                }
-                Text("Model: ${st.model} · today ${fmtTok(st.tokens)} / ${fmtTok(st.budget)} tokens · $${"%.2f".format(st.cost)}",
-                    color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-            }
 
-            Section("Session")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SmallBtn("＋ New session", Modifier.weight(1f)) { onConfirm("new") }
-                SmallBtn("■ Stop all", Modifier.weight(1f), color = ErrC) { onConfirm("stopall") }
-            }
-            Spacer(Modifier.height(8.dp))
-            SmallBtn("Clear activity feed", Modifier.fillMaxWidth()) { onConfirm("clear") }
+        Section("Conversation")
+        SetCard {
+            ToggleRow("Show raw tool output", "Output under each step (tap it to expand)", showOutput, act.onShowOutput)
+            SetDivider()
+            ToggleRow("Colour by agent", "Tag lines from helper agents with their colour", tint, act.onTint)
+        }
 
-            if (!st?.recent.isNullOrEmpty()) {
-                Section("Recent tasks")
-                st!!.recent.forEach { t ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
-                        val (ic, col) = when (t.status) { "done" -> "✓" to OkC; "failed", "aborted" -> "✕" to ErrC; "running" -> "●" to Accent; else -> "•" to Muted }
-                        Text(ic, color = col, fontSize = 13.sp, modifier = Modifier.width(18.dp))
-                        Column {
-                            Text(if (t.kind == "goal") "🎯 Goal cycle" else t.description.lineSequence().firstOrNull() ?: "",
-                                color = TextMain, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Text("#${t.id} · ${t.status} · ${t.steps} steps · ${fmtTok(t.tokens)} tok", color = Muted, fontSize = 11.sp)
-                        }
+        Section("Telegram / CLI verbosity")
+        Segmented(VERBOSITY_LEVELS, st?.verbose, act.onVerbose)
+
+        Section("Tools")
+        SmallBtn("Post the step log to the chat", Modifier.fillMaxWidth(), onClick = act.onLog)
+
+        Section("Session")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SmallBtn("＋ New session", Modifier.weight(1f)) { act.onConfirm("new") }
+            SmallBtn("■ Stop all", Modifier.weight(1f), color = ErrC) { act.onConfirm("stopall") }
+        }
+        Spacer(Modifier.height(8.dp))
+        SmallBtn("Clear activity feed", Modifier.fillMaxWidth()) { act.onConfirm("clear") }
+
+        Section("Agent")
+        SetCard {
+            InfoRow("Workdir", st?.workdir?.ifEmpty { "—" } ?: "—", mono = true)
+            InfoRow("Access", st?.let { "${it.access} · approvals ${if (it.approvalsOn) "on" else "off"}" } ?: "—")
+            InfoRow("Model", st?.model?.ifEmpty { "—" } ?: "—")
+            InfoRow("Tokens in / out", st?.let { "${fmtTok(it.promptTokens)} / ${fmtTok(it.completionTokens)}" } ?: "—")
+            InfoRow("Today", st?.let { "${fmtTok(it.tokens)} of ${fmtTok(it.budget)} · $${"%.2f".format(it.cost)}" } ?: "—")
+        }
+
+        if (!st?.recent.isNullOrEmpty()) {
+            Section("Recent tasks")
+            st!!.recent.forEach { t ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+                    val (ic, col) = when (t.status) { "done" -> "✓" to OkC; "failed", "aborted" -> "✕" to ErrC; "running" -> "●" to Accent; else -> "•" to Muted }
+                    Text(ic, color = col, fontSize = 13.sp, modifier = Modifier.width(18.dp))
+                    Column {
+                        Text(if (t.kind == "goal") "🎯 Goal cycle" else t.description.lineSequence().firstOrNull() ?: "",
+                            color = TextMain, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text("#${t.id} · ${t.status} · ${t.steps} steps · ${fmtTok(t.tokens)} tok", color = Muted, fontSize = 11.sp)
                     }
                 }
             }
+        }
 
-            Section("Connection")
-            Text(url, color = Text2, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-            Spacer(Modifier.height(8.dp))
-            SmallBtn("Disconnect & forget token", Modifier.fillMaxWidth(), color = ErrC) { vm.logout() }
-            Spacer(Modifier.height(24.dp))
+        Section("Connection")
+        Text(url, color = Text2, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+        Spacer(Modifier.height(8.dp))
+        SmallBtn("Disconnect & forget token", Modifier.fillMaxWidth(), color = ErrC, onClick = act.onLogout)
+    }
+}
+
+@Composable
+fun SetCard(content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Panel)
+        .border(1.dp, Border, RoundedCornerShape(14.dp)).padding(14.dp, 10.dp), content = content)
+}
+
+@Composable
+fun SetDivider() { Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp).background(Border)) }
+
+@Composable
+fun ToggleRow(title: String, sub: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = TextMain, fontSize = 14.sp)
+            Text(sub, color = Muted, fontSize = 12.sp)
+        }
+        Switch(checked = checked, onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(checkedTrackColor = Accent, checkedThumbColor = AccentInk,
+                uncheckedTrackColor = Panel3, uncheckedThumbColor = Muted, uncheckedBorderColor = Border))
+    }
+}
+
+@Composable
+fun InfoRow(k: String, v: String, mono: Boolean = false) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text(k, color = Muted, fontSize = 13.sp, modifier = Modifier.width(118.dp))
+        Text(v, color = TextMain, fontSize = if (mono) 12.sp else 13.sp, fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default)
+    }
+}
+
+@Composable
+fun Segmented(options: List<String>, current: String?, onPick: (String) -> Unit) {
+    Row(Modifier.clip(RoundedCornerShape(12.dp)).background(Panel2).padding(3.dp)) {
+        options.forEach { o ->
+            val on = o == current
+            Box(Modifier.clip(RoundedCornerShape(9.dp)).background(if (on) Panel3 else Color.Transparent)
+                .clickable { if (!on) onPick(o) }.padding(horizontal = 18.dp, vertical = 8.dp)) {
+                Text(o.replaceFirstChar { it.uppercase() }, color = if (on) TextMain else Muted, fontSize = 13.sp,
+                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal)
+            }
         }
     }
 }
@@ -608,7 +716,7 @@ fun ReasoningPicker(current: String, onPick: (String) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Reasoning", color = TextMain, fontSize = 14.sp)
-            Text("How hard the model thinks", color = Muted, fontSize = 12.sp)
+            Text("How hard the model thinks before acting", color = Muted, fontSize = 12.sp)
         }
         Box {
             SmallBtn("$current  ▾") { open = true }

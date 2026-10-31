@@ -33,6 +33,11 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), RelayClient.List
     val attachments = MutableStateFlow<List<Attachment>>(emptyList())
     val quick = MutableStateFlow(quickFromJson(prefs.getString("quick", null)) ?: DEFAULT_QUICK)
     val sharedText = MutableStateFlow<String?>(null)
+    // display options, saved on the phone (like the web console's Settings → Conversation)
+    val showOutput = MutableStateFlow(prefs.getBoolean("showOutput", false))
+    val tintAgents = MutableStateFlow(prefs.getBoolean("tintAgents", true))
+    fun setShowOutput(on: Boolean) { showOutput.value = on; prefs.edit().putBoolean("showOutput", on).apply() }
+    fun setTintAgents(on: Boolean) { tintAgents.value = on; prefs.edit().putBoolean("tintAgents", on).apply() }
 
     private var client: RelayClient? = null
     private val resolvedAids = ConcurrentHashMap.newKeySet<String>()
@@ -102,6 +107,8 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), RelayClient.List
     fun setMaxSteps(n: Int) = send("/maxsteps $n")
     fun setInterval(min: String) = send("/interval $min")
     fun setWorkers(n: Int) = send("/workers $n")
+    fun setVerbose(level: String) = send("/verbose $level")
+    fun postLog() = send("/log")
 
     // ---- quick commands (saved on the device) -------------------------------------------------
     fun saveQuick(list: List<QuickCmd>) {
