@@ -84,6 +84,10 @@ Connect to `wss://your-relay.example/ws/app?after=0` with header
 - Live messages: `{"type":"event","event":{…}}`, `{"type":"state","state":{…}}`,
   `{"type":"reply","ref":…,"html":…}`, `{"type":"presence","agent_online":bool}`.
 - Send a command: `{"type":"command","text":"list the files","ref":"abc"}`.
+- Attach a file: `{"type":"upload","name":"photo.png","data":"<base64>","ref":"u1"}` → the agent
+  saves it under `WORKDIR/uploads/` and replies `{"type":"upload_ack","ref":"u1",
+  "files":[{"name","path","size"}]}` (or `{"error":...}`). Reference the returned `path`
+  in a follow-up task so the agent can use the file.
 
 Each `event` is the same shape the dashboard uses: `{id, ts, kind, level, html, data, agent}`.
 `state` is the full status snapshot (current task, fleet/agents, queue, tokens, …).

@@ -105,7 +105,7 @@ def make_app() -> web.Application:
     async def agent_ws(req: web.Request):
         if not ok(bearer(req), agent_key):
             return web.json_response({"error": "unauthorized"}, status=401)
-        ws = web.WebSocketResponse(heartbeat=30, max_msg_size=8 * 1024 * 1024)
+        ws = web.WebSocketResponse(heartbeat=30, max_msg_size=48 * 1024 * 1024)
         await ws.prepare(req)
         if hub.agent_online():          # only one agent; replace a stale connection
             await hub.agent.close()
@@ -127,7 +127,7 @@ def make_app() -> web.Application:
                 elif kind == "state":
                     hub.state = data.get("state")
                     await hub.to_apps(data)
-                elif kind == "reply":
+                elif kind in ("reply", "upload_ack"):
                     await hub.to_apps(data)
         finally:
             if hub.agent is ws:
@@ -139,7 +139,7 @@ def make_app() -> web.Application:
     async def app_ws(req: web.Request):
         if not ok(bearer(req), user_token):
             return web.json_response({"error": "unauthorized"}, status=401)
-        ws = web.WebSocketResponse(heartbeat=30)
+        ws = web.WebSocketResponse(heartbeat=30, max_msg_size=48 * 1024 * 1024)
         await ws.prepare(req)
         hub.apps.add(ws)
         after = int(req.query.get("after", "0") or 0)
@@ -155,13 +155,20 @@ def make_app() -> web.Application:
                     data = json.loads(msg.data)
                 except ValueError:
                     continue
-                if data.get("type") == "command":
-                    text = str(data.get("text", ""))
-                    delivered = await hub.to_agent({"type": "command", "text": text,
+                t = data.get("type")
+                if t == "command":
+                    delivered = await hub.to_agent({"type": "command", "text": str(data.get("text", "")),
                                                     "ref": data.get("ref"), "from": "app"})
                     if not delivered:
                         await ws.send_str(json.dumps({"type": "reply", "ref": data.get("ref"),
                                                       "html": "⚠️ The agent is offline right now."}))
+                elif t == "upload":
+                    delivered = await hub.to_agent({"type": "upload", "name": data.get("name"),
+                                                    "data": data.get("data"), "ref": data.get("ref"),
+                                                    "from": "app"})
+                    if not delivered:
+                        await ws.send_str(json.dumps({"type": "upload_ack", "ref": data.get("ref"),
+                                                      "error": "agent offline"}))
         finally:
             hub.apps.discard(ws)
             log.info("app disconnected (%d left)", len(hub.apps))

@@ -12,8 +12,12 @@ outage never touches the agent's own work.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
+import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 import aiohttp
@@ -75,7 +79,7 @@ class RelayClient:
         while True:
             try:
                 async with aiohttp.ClientSession(headers={"Authorization": f"Bearer {self.agent_key}"}) as s:
-                    async with s.ws_connect(self.url, heartbeat=30, max_msg_size=8 * 1024 * 1024) as ws:
+                    async with s.ws_connect(self.url, heartbeat=30, max_msg_size=48 * 1024 * 1024) as ws:
                         log.info("connected to relay %s", self.url)
                         backoff = 2.0
                         await self._session(ws)
@@ -101,8 +105,11 @@ class RelayClient:
                     data = json.loads(msg.data)
                 except ValueError:
                     continue
-                if data.get("type") == "command":
+                t = data.get("type")
+                if t == "command":
                     await self._handle_command(ws, data)
+                elif t == "upload":
+                    await self._handle_upload(ws, data)
         finally:
             sender.cancel()
             await asyncio.gather(sender, return_exceptions=True)
@@ -133,3 +140,37 @@ class RelayClient:
                                      ensure_ascii=False))
         # nudge a fresh state snapshot right after a command
         await ws.send_str(self._state_msg())
+
+    async def _handle_upload(self, ws, data: dict) -> None:
+        """Save a file the app sent (base64) into WORKDIR/uploads and ack with its path."""
+        ref = data.get("ref")
+        try:
+            raw = base64.b64decode((data.get("data") or "").encode(), validate=False)
+        except (binascii.Error, ValueError):
+            raw = b""
+        if not raw:
+            await ws.send_str(json.dumps({"type": "upload_ack", "ref": ref, "error": "empty or invalid file"}))
+            return
+        if len(raw) > 25 * 1024 * 1024:
+            await ws.send_str(json.dumps({"type": "upload_ack", "ref": ref, "error": "file too large (max 25 MB)"}))
+            return
+        workdir = Path(self.commands.worker.cfg.workdir)
+        updir = workdir / "uploads"
+        updir.mkdir(parents=True, exist_ok=True)
+        base = (data.get("name") or "file").replace("\\", "/").split("/")[-1]
+        name = re.sub(r"[^A-Za-z0-9._-]", "_", base)[:120] or "file"
+        dest = updir / name
+        i = 1
+        while dest.exists():
+            dest = updir / f"{dest.stem}-{i}{dest.suffix}"
+            i += 1
+        try:
+            dest.write_bytes(raw)
+        except OSError as e:
+            await ws.send_str(json.dumps({"type": "upload_ack", "ref": ref, "error": str(e)}))
+            return
+        rel = f"uploads/{dest.name}"
+        self.hub.emit(f"📎 received <code>{dest.name}</code> ({len(raw) // 1024 or 1} KB) → <code>{rel}</code>",
+                      kind="info")
+        await ws.send_str(json.dumps({"type": "upload_ack", "ref": ref,
+                                      "files": [{"name": dest.name, "path": rel, "size": len(raw)}]}))
