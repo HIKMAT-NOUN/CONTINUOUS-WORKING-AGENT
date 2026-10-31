@@ -130,14 +130,23 @@ class Spawner:
     """Delegation tools for the lead agent. Returns ToolResult objects."""
 
     def __init__(self, fleet: Fleet, builder: AgentBuilder, cfg: "Config",
-                 parent_task_id_getter: Callable[[], int], review_enabled: Callable[[], bool] | None = None):
+                 parent_task_id_getter: Callable[[], int], review_enabled: Callable[[], bool] | None = None,
+                 max_workers: Callable[[], int] | None = None):
         self.fleet = fleet
         self.builder = builder
         self.cfg = cfg
         self._parent_task_id = parent_task_id_getter
         self.results: dict[str, Outcome] = {}
-        self.can_spawn = cfg.max_workers > 0
         self._review_enabled = review_enabled
+        self._max_workers = max_workers
+
+    @property
+    def max_workers(self) -> int:
+        return self._max_workers() if self._max_workers else self.cfg.max_workers
+
+    @property
+    def can_spawn(self) -> bool:
+        return self.max_workers > 0
 
     @property
     def can_review(self) -> bool:
@@ -159,9 +168,9 @@ class Spawner:
 
     async def spawn(self, title: str, instructions: str, parent_id: str) -> ToolResult:
         running = self.fleet.active_workers(parent_id)
-        if len(running) >= self.cfg.max_workers:
+        if len(running) >= self.max_workers:
             return ToolResult(False, f"error: you already have {len(running)} helper(s) running "
-                              f"(max {self.cfg.max_workers}). Call wait_for_workers first.",
+                              f"(max {self.max_workers}). Call wait_for_workers first.",
                               "worker limit reached")
         aid = self.fleet.new_id("w")
         self.fleet.register(aid, "worker", parent_id, title, self.cfg.worker_max_steps)

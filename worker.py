@@ -49,12 +49,13 @@ class Worker:
         self._main_task_id = 0
         self.fleet = Fleet(hub)
         self.fleet.register("main", "main", None, "idle", cfg.max_steps_per_task)
+        self._fix_main_cap()
         self.fleet.set_main_status("idle")
         self.builder = AgentBuilder(cfg, db, llm, hub, approvals, self.wait_if_paused, self.fleet)
         self.spawner = Spawner(self.fleet, self.builder, cfg, lambda: self._main_task_id,
-                               review_enabled=lambda: self.review_enabled)
-        use_spawner = self.spawner if (cfg.max_workers > 0 or cfg.review) else None
-        self.agent = self.builder.build("main", "main", spawner=use_spawner)
+                               review_enabled=lambda: self.review_enabled,
+                               max_workers=lambda: self.max_workers)
+        self.agent = self.builder.build("main", "main", spawner=self.spawner)
 
     # state ------------------------------------------------------------------------
     def poke(self) -> None:
@@ -123,6 +124,52 @@ class Worker:
             except asyncio.TimeoutError:
                 pass
 
+    # runtime-editable settings (DB overrides .env; None -> fall back to cfg) ----------
+    def _int_setting(self, key: str, default: int) -> int:
+        v = self.db.get(key)
+        try:
+            return int(v) if v is not None and v != "" else default
+        except ValueError:
+            return default
+
+    @property
+    def max_steps(self) -> int:        # 0 = unlimited
+        return self._int_setting("max_steps", self.cfg.max_steps_per_task)
+
+    @property
+    def effective_max_steps(self) -> int:
+        return self.max_steps if self.max_steps > 0 else 1_000_000
+
+    @property
+    def goal_interval(self) -> float:
+        v = self.db.get("goal_interval")
+        try:
+            return float(v) if v not in (None, "") else self.cfg.goal_interval_min
+        except ValueError:
+            return self.cfg.goal_interval_min
+
+    @property
+    def max_workers(self) -> int:
+        return self._int_setting("max_workers", self.cfg.max_workers)
+
+    def _fix_main_cap(self) -> None:
+        m = self.fleet.agents.get("main")
+        if m:
+            m["max_steps"] = self.max_steps
+
+    def set_int(self, key: str, value) -> None:
+        self.db.set(key, str(int(value)))
+        if key == "max_steps":
+            self._fix_main_cap()
+
+    def new_project(self) -> tuple[int, int | None]:
+        """Fresh slate: stop everything, clear the goal and the event history."""
+        cleared, tid = self.stop_all()
+        self.db.set("goal", None)
+        self.db.clear_events()
+        self.hub.emit("🆕 New session started — queue, goal and history cleared.", kind="clear")
+        return cleared, tid
+
     @property
     def reasoning(self) -> str:
         v = self.db.get("reasoning")
@@ -183,7 +230,7 @@ class Worker:
                 goal = self.db.get("goal")
                 if goal:
                     last = float(self.db.get("goal_last_end") or 0)
-                    due = last + self.cfg.goal_interval_min * 60
+                    due = last + self.goal_interval * 60
                     if time.time() >= due:
                         self._queue_goal_cycle(goal)
                         continue
@@ -209,8 +256,8 @@ class Worker:
 
     def _build_job(self, task: dict) -> Job:
         return Job(task_id=task["id"], description=task["description"], kind=task["kind"],
-                   system=self.builder.prompt(MAIN_PROMPT, self.cfg.max_steps_per_task),
-                   max_steps=self.cfg.max_steps_per_task, persist=True, recap=True,
+                   system=self.builder.prompt(MAIN_PROMPT, self.max_steps or "no fixed"),
+                   max_steps=self.effective_max_steps, persist=True, recap=True,
                    messages=self.db.load_messages(task),
                    steps=task.get("steps") or 0, tokens=task.get("tokens") or 0)
 
@@ -312,11 +359,11 @@ class Worker:
             "pause_reason": self.pause_reason,
             "current": cur,
             "fleet": self.fleet.snapshot(),
-            "max_steps": self.cfg.max_steps_per_task,
+            "max_steps": self.max_steps,
             "queue": self.db.pending(50),
             "queue_count": self.db.count_pending(),
             "goal": self.db.get("goal"),
-            "goal_interval_min": self.cfg.goal_interval_min,
+            "goal_interval_min": self.goal_interval,
             "tokens_today": u["prompt_tokens"] + u["completion_tokens"],
             "prompt_tokens": u["prompt_tokens"], "completion_tokens": u["completion_tokens"],
             "budget": self.cfg.daily_token_budget,
@@ -326,7 +373,7 @@ class Worker:
             "workdir": str(self.cfg.workdir),
             "access": "full" if self.cfg.full_access else "workdir only",
             "approvals": self.cfg.approvals,
-            "max_workers": self.cfg.max_workers,
+            "max_workers": self.max_workers,
             "review": self.review_enabled,
             "reasoning": self.reasoning,
             "recent": self.db.recent_tasks(12),
@@ -351,7 +398,8 @@ class Worker:
             name = "goal cycle" if c["kind"] == "goal" else "task"
             mins = (time.time() - c["started"]) / 60
             lines.append(f"<b>Current:</b> {name} #{c['id']} — {h(truncate(c['description'], 200))}")
-            lines.append(f"<b>Step:</b> {m.get('step', 0)}/{self.cfg.max_steps_per_task} · {mins:.0f} min")
+            cap = self.max_steps or "∞"
+            lines.append(f"<b>Step:</b> {m.get('step', 0)}/{cap} · {mins:.0f} min")
             if m.get("action"):
                 lines.append(f"<b>Last action:</b> {m['action']}")
         helpers = [a for a in self.fleet.snapshot() if a["role"] != "main" and a["status"] == "working"]

@@ -180,6 +180,9 @@ class DB:
             self._x("DELETE FROM events WHERE id <= ?", (eid - 5000,))
         return eid
 
+    def clear_events(self) -> None:
+        self._x("DELETE FROM events")
+
     def events_after(self, after_id: int = 0, limit: int = 300) -> list[dict]:
         if after_id:
             rows = self._q("SELECT * FROM events WHERE id>? ORDER BY id LIMIT ?", (after_id, limit))

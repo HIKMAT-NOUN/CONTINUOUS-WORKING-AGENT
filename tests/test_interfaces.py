@@ -119,3 +119,24 @@ async def test_stopall_and_review_toggle(cfg):
     await c.handle("/review off"); assert w.review_enabled is False
     # the review tool is hidden from the lead when review is off and no workers
     assert "request_review" not in [t["function"]["name"] for t in w.agent.tools.specs()]
+
+
+async def test_runtime_settings_and_unlimited_steps(cfg):
+    db, hub, ap, w, c = build(cfg)
+    # max steps editable + unlimited
+    assert "40" in await c.handle("/maxsteps 7") or w.max_steps == 7
+    assert w.max_steps == 7 and w.effective_max_steps == 7
+    await c.handle("/maxsteps off")
+    assert w.max_steps == 0 and w.effective_max_steps == 1_000_000
+    # interval + workers
+    await c.handle("/interval 10"); assert w.goal_interval == 10
+    await c.handle("/workers 5"); assert w.max_workers == 5 and w.spawner.can_spawn is True
+    await c.handle("/workers 0"); assert w.max_workers == 0 and w.spawner.can_spawn is False
+    # status reflects runtime values
+    st = w.status_dict()
+    assert st["max_steps"] == 0 and st["goal_interval_min"] == 10 and st["max_workers"] == 0
+    # new project clears goal + queue + events
+    await c.handle("/goal keep tidy"); await c.handle("/task a")
+    assert db.get("goal") and db.count_pending() == 1
+    await c.handle("/newproject")
+    assert db.get("goal") is None and db.count_pending() == 0

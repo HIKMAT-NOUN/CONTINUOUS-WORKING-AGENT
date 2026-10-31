@@ -25,12 +25,18 @@ HELP = """<b>Commands</b> (plain text without a / is added as a task)
 /stopall — abort the current task AND clear the whole queue
 /review on|off — turn the automatic review agent on or off
 /reasoning auto|low|medium|high|max|off — set the model's thinking depth
+/maxsteps &lt;n&gt; — tool-call limit per task (0 or off = unlimited)
+/interval &lt;min&gt; — minutes between standing-goal cycles
+/workers &lt;n&gt; — max parallel helper agents (0 = no delegation)
+/newproject — fresh start: stop all, clear the goal and the history
+/clear — clear the activity history only
 /approve &lt;id&gt;, /deny &lt;id&gt; — answer a pending approval (id optional if only one)
 /verbose off|steps|full — narration level for Telegram and the CLI
 /log — last 20 steps"""
 
 NAMES = ("task", "goal", "status", "queue", "pause", "resume", "stop", "stopall", "cancelall",
-         "review", "reasoning", "approve", "deny", "verbose", "log", "help", "start")
+         "review", "reasoning", "maxsteps", "interval", "workers", "newproject", "new",
+         "clear", "approve", "deny", "verbose", "log", "help", "start")
 
 
 class Commands:
@@ -127,6 +133,53 @@ class Commands:
             return f"🧠 Reasoning depth set to <b>{a}</b>.{note}"
         return (f"🧠 Reasoning depth is <b>{h(self.worker.reasoning)}</b>. "
                 "Usage: /reasoning auto|low|medium|high|max|off")
+
+    def c_maxsteps(self, arg, source):
+        a = arg.strip().lower()
+        if a in ("off", "none", "null", "unlimited", "0"):
+            self.worker.set_int("max_steps", 0)
+            return "♾️ Step limit removed — tasks run with no fixed tool-call cap. Watch your token budget."
+        if a.isdigit() and int(a) > 0:
+            self.worker.set_int("max_steps", int(a))
+            return f"🔢 Step limit set to <b>{int(a)}</b> tool calls per task."
+        cur = self.worker.max_steps or "unlimited"
+        return f"🔢 Step limit is <b>{cur}</b>. Usage: /maxsteps &lt;number&gt; (or off for unlimited)"
+
+    def c_interval(self, arg, source):
+        a = arg.strip()
+        try:
+            m = float(a)
+            if m <= 0:
+                raise ValueError
+        except ValueError:
+            return f"⏱ Goal interval is <b>{self.worker.goal_interval:g}</b> min. Usage: /interval &lt;minutes&gt;"
+        self.worker.set_int("goal_interval", int(m)) if m == int(m) else self.worker.db.set("goal_interval", str(m))
+        self.worker.poke()
+        return f"⏱ Standing-goal interval set to <b>{m:g}</b> min."
+
+    def c_workers(self, arg, source):
+        a = arg.strip()
+        if a.isdigit():
+            self.worker.set_int("max_workers", int(a))
+            return f"🤖 Max parallel helpers set to <b>{int(a)}</b>" + (" (delegation off)." if int(a) == 0 else ".")
+        return f"🤖 Max helpers is <b>{self.worker.max_workers}</b>. Usage: /workers &lt;number&gt;"
+
+    def c_newproject(self, arg, source):
+        cleared, tid = self.worker.new_project()
+        bits = []
+        if tid:
+            bits.append(f"aborted task #{tid}")
+        if cleared:
+            bits.append(f"cleared {cleared} queued")
+        extra = (" (" + ", ".join(bits) + ")") if bits else ""
+        return f"🆕 New session — goal and history cleared{extra}."
+
+    c_new = c_newproject
+
+    def c_clear(self, arg, source):
+        self.worker.db.clear_events()
+        self.worker.hub.emit("🧹 Activity history cleared.", kind="clear")
+        return ""
 
     def c_review(self, arg, source):
         a = arg.strip().lower()

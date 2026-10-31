@@ -150,6 +150,11 @@ Plain text without a leading `/` is added as a task.
 | `/stopall` | abort the current task **and** clear the whole queue |
 | `/review on\|off` | turn the automatic review agent on or off at runtime |
 | `/reasoning auto\|low\|medium\|high\|max\|off` | set the model's thinking depth (MiniMax reasoning_effort / thinking) |
+| `/maxsteps <n>` | tool-call limit per task at runtime; `0`/`off` = unlimited |
+| `/interval <min>` | minutes between standing-goal cycles |
+| `/workers <n>` | max parallel helper agents (`0` = no delegation) |
+| `/newproject` | fresh start: stop all, clear the goal and the activity history |
+| `/clear` | clear the activity history only |
 | `/approve [id]`, `/deny [id]` | answer a pending approval (`y`/`n` in the CLI) |
 | `/verbose off\|steps\|full` | narration level for Telegram and the CLI |
 | `/log` | last 20 steps |
